@@ -18,6 +18,14 @@
                     </flux:sidebar.item>
                 </flux:sidebar.group>
 
+                @can('viewAny', \App\Models\User::class)
+                    <flux:sidebar.group :heading="__('ผู้ดูแลระบบ')" class="grid" data-test="admin-menu">
+                        <flux:sidebar.item icon="users" :href="route('users.index')" :current="request()->routeIs('users.*')" wire:navigate>
+                            {{ __('ผู้ใช้งานและสิทธิ์') }}
+                        </flux:sidebar.item>
+                    </flux:sidebar.group>
+                @endcan
+
                 <flux:sidebar.group :heading="__('บัญชีของฉัน')" class="grid">
                     <flux:sidebar.item icon="user-circle" :href="route('profile.edit')" :current="request()->routeIs('profile.edit', 'security.edit')" wire:navigate>
                         {{ __('Settings') }}

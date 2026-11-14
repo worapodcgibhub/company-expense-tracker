@@ -7,6 +7,8 @@ use Database\Factories\UserFactory;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
+use Illuminate\Database\Eloquent\Attributes\Scope;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -27,6 +29,7 @@ use Laravel\Fortify\TwoFactorAuthenticatable;
  * @property string|null $two_factor_recovery_codes
  * @property Carbon|null $two_factor_confirmed_at
  * @property string|null $remember_token
+ * @property Carbon|null $deactivated_at
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */
@@ -59,6 +62,7 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'role' => UserRole::class,
+            'deactivated_at' => 'datetime',
         ];
     }
 
@@ -70,6 +74,34 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
     public function isOwner(): bool
     {
         return $this->hasRole(UserRole::Owner);
+    }
+
+    public function isAccountant(): bool
+    {
+        return $this->hasRole(UserRole::Accountant);
+    }
+
+    public function isStaff(): bool
+    {
+        return $this->hasRole(UserRole::Staff);
+    }
+
+    /**
+     * Deactivated users cannot sign in (see FortifyServiceProvider) and are
+     * signed out on their next request (see EnsureUserIsActive).
+     */
+    public function isActive(): bool
+    {
+        return $this->deactivated_at === null;
+    }
+
+    /**
+     * @param  Builder<User>  $query
+     */
+    #[Scope]
+    protected function active(Builder $query): void
+    {
+        $query->whereNull('deactivated_at');
     }
 
     /**

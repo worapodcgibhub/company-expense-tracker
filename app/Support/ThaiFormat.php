@@ -109,8 +109,9 @@ class ThaiFormat
     {
         $end = Carbon::instance($reference ?? now())->startOfMonth();
 
-        return collect(range($count - 1, 0))
-            ->map(fn (int $offset) => $end->copy()->subMonthsNoOverflow($offset))
-            ->all();
+        return array_map(
+            fn (int $offset) => $end->copy()->subMonthsNoOverflow($offset),
+            range($count - 1, 0),
+        );
     }
 }

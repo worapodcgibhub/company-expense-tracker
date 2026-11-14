@@ -1,27 +1,19 @@
 <?php
 
-use App\Concerns\PasswordValidationRules;
-use App\Livewire\Actions\Logout;
-use Illuminate\Support\Facades\Auth;
 use Livewire\Component;
 
+/*
+ * Self-service account deletion is disabled for every role: accounts are
+ * never deleted (their history must be kept for accounting); the Owner
+ * deactivates users instead. The form is no longer rendered anywhere, and
+ * this hard stop makes sure the action cannot be triggered directly either.
+ */
 new class extends Component {
-    use PasswordValidationRules;
-
     public string $password = '';
 
-    /**
-     * Delete the currently authenticated user.
-     */
-    public function deleteUser(Logout $logout): void
+    public function deleteUser(): void
     {
-        $this->validate([
-            'password' => $this->currentPasswordRules(),
-        ]);
-
-        tap(Auth::user(), $logout(...))->delete();
-
-        $this->redirect('/', navigate: true);
+        abort(403, 'ปิดการลบบัญชีด้วยตัวเองแล้ว หากต้องการหยุดใช้งานบัญชี กรุณาติดต่อเจ้าของบริษัท');
     }
 }; ?>
 

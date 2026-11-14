@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\UserRole;
 use App\Models\User;
 use Livewire\Livewire;
 
@@ -78,33 +79,24 @@ test('email verification status is unchanged when email address is unchanged', f
     expect($user->refresh()->email_verified_at)->not->toBeNull();
 });
 
-test('user can delete their account', function () {
-    $user = User::factory()->create();
+test('the delete account option is hidden for every role', function (UserRole $role) {
+    $this->actingAs(User::factory()->create(['role' => $role]))
+        ->get(route('profile.edit'))
+        ->assertOk()
+        ->assertDontSee('data-test="delete-user-button"', false)
+        ->assertDontSee('confirm-user-deletion');
+})->with([UserRole::Owner, UserRole::Accountant, UserRole::Staff]);
+
+test('no role can delete their own account, even with the correct password', function (UserRole $role) {
+    $user = User::factory()->create(['role' => $role]);
 
     $this->actingAs($user);
 
-    $response = Livewire::test('pages::settings.delete-user-modal')
+    Livewire::test('pages::settings.delete-user-modal')
         ->set('password', 'password')
-        ->call('deleteUser');
-
-    $response
-        ->assertHasNoErrors()
-        ->assertRedirect('/');
-
-    expect($user->fresh())->toBeNull();
-    expect(auth()->check())->toBeFalse();
-});
-
-test('correct password must be provided to delete account', function () {
-    $user = User::factory()->create();
-
-    $this->actingAs($user);
-
-    $response = Livewire::test('pages::settings.delete-user-modal')
-        ->set('password', 'wrong-password')
-        ->call('deleteUser');
-
-    $response->assertHasErrors(['password']);
+        ->call('deleteUser')
+        ->assertForbidden();
 
     expect($user->fresh())->not->toBeNull();
-});
+    expect(auth()->check())->toBeTrue();
+})->with([UserRole::Owner, UserRole::Accountant, UserRole::Staff]);
