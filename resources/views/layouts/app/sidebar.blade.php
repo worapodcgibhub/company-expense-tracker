@@ -18,11 +18,17 @@
                     </flux:sidebar.item>
                 </flux:sidebar.group>
 
-                @can('viewAny', \App\Models\CreditCard::class)
+                @can('viewAny', \App\Models\Subscription::class)
                     <flux:sidebar.group :heading="__('การเงิน')" class="grid" data-test="finance-menu">
-                        <flux:sidebar.item icon="credit-card" :href="route('credit-cards.index')" :current="request()->routeIs('credit-cards.*')" wire:navigate>
-                            {{ __('บัตรที่ใช้ชำระเงิน') }}
+                        <flux:sidebar.item icon="calendar-days" :href="route('subscriptions.index')" :current="request()->routeIs('subscriptions.*')" wire:navigate data-test="subscriptions-menu">
+                            {{ auth()->user()->isOwner() || auth()->user()->isAccountant() ? __('Subscription') : __('Subscription ของฉัน') }}
                         </flux:sidebar.item>
+
+                        @can('viewAny', \App\Models\CreditCard::class)
+                            <flux:sidebar.item icon="credit-card" :href="route('credit-cards.index')" :current="request()->routeIs('credit-cards.*')" wire:navigate data-test="credit-cards-menu">
+                                {{ __('บัตรที่ใช้ชำระเงิน') }}
+                            </flux:sidebar.item>
+                        @endcan
                     </flux:sidebar.group>
                 @endcan
 

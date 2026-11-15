@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
@@ -24,7 +25,8 @@ use Illuminate\Support\Str;
  * `deactivated_at`, `created_by` and `updated_by` are not mass-assignable;
  * they are set explicitly by server-side code with forceFill().
  *
- * Phase 2.3 adds: subscriptions(): HasMany<Subscription>.
+ * Subscriptions reference cards with a restricting foreign key, so a card
+ * that is in use can never be deleted from the database either.
  *
  * @property int $id
  * @property string $name
@@ -105,6 +107,14 @@ class CreditCard extends Model
     public static function normalizeIssuer(string $issuer): string
     {
         return Str::lower((string) preg_replace('/\s+/u', '', $issuer));
+    }
+
+    /**
+     * @return HasMany<Subscription, $this>
+     */
+    public function subscriptions(): HasMany
+    {
+        return $this->hasMany(Subscription::class);
     }
 
     /**

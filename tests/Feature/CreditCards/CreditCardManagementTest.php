@@ -101,12 +101,12 @@ test('the accountant cannot add, edit, deactivate or reactivate cards even when 
         ->and($inactive->fresh()->isActive())->toBeFalse();
 });
 
-test('the finance menu is shown to the owner and accountant only', function (UserRole $role, bool $visible) {
+test('the card menu is shown to the owner and accountant only', function (UserRole $role, bool $visible) {
     $response = $this->actingAs(User::factory()->create(['role' => $role]))->get(route('dashboard'));
 
     $visible
-        ? $response->assertSee('data-test="finance-menu"', false)
-        : $response->assertDontSee('data-test="finance-menu"', false);
+        ? $response->assertSee('data-test="credit-cards-menu"', false)
+        : $response->assertDontSee('data-test="credit-cards-menu"', false);
 })->with([
     'owner' => [UserRole::Owner, true],
     'accountant' => [UserRole::Accountant, true],

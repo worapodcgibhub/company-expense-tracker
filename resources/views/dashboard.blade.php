@@ -5,19 +5,26 @@
     $today = now();
 
     /*
-     * Dashboard data.
-     * The expense tables do not exist yet (Phase 2–5), so these are the system's
-     * real current values: nothing recorded → zero / empty. No sample data.
-     * Each value will be replaced by a database query as its phase ships.
+     * Dashboard data. No sample data anywhere.
+     * - Subscriptions (Phase 2.3) are real, limited to what this user may see
+     *   (Staff: only their own). Amounts are ESTIMATES, totalled per currency.
+     * - Actual expenses do not exist yet (Phase 2.4+): those values stay zero /
+     *   empty until their phase ships.
      */
+    $subscriptions = new \App\Support\SubscriptionOverview($user, $today);
+    $monthlyEstimate = $subscriptions->monthlyEstimateByCurrency();
+
     $summary = [
         'month_total' => 0,      // minor units (satang)
         'recorded_count' => 0,
-        'upcoming_7d_count' => 0,
+        'upcoming_7d_count' => $subscriptions->upcoming(7)->count(),
         'missing_receipt_count' => 0,
     ];
-    $upcomingCharges = collect();
-    $actionItems = collect();
+    $upcomingCharges = $subscriptions->upcoming(30);
+    $actionItems = $subscriptions->overdue()
+        ->map(fn ($s) => ['subscription' => $s, 'label' => $s->dueLabel($today), 'tone' => 'red'])
+        ->concat($subscriptions->needingNewCard()->map(fn ($s) => ['subscription' => $s, 'label' => 'บัตรถูกปิดใช้งาน ต้องเปลี่ยนบัตร', 'tone' => 'red']))
+        ->values();
     $recentExpenses = collect();
     $categoryBreakdown = [];
     $monthlyTotals = collect(ThaiFormat::recentMonths(6, $today))
@@ -113,12 +120,46 @@
                     icon="credit-card"
                 />
 
+                <div class="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600" data-test="subscription-overview">
+                    <span>ใช้งานอยู่ <strong class="text-slate-900">{{ number_format($subscriptions->activeCount()) }}</strong> บริการ</span>
+                    @if ($monthlyEstimate)
+                        <span>
+                            ประมาณการต่อเดือน
+                            @foreach ($monthlyEstimate as $currency => $amount)
+                                <strong class="text-slate-900">{{ ThaiFormat::money($amount, $currency) }}</strong>@if (! $loop->last) · @endif
+                            @endforeach
+                        </span>
+                    @endif
+                    <a href="{{ route('subscriptions.index') }}" wire:navigate class="ms-auto font-medium text-indigo-600 hover:text-indigo-700">ดูทั้งหมด →</a>
+                </div>
+
                 @if ($upcomingCharges->isEmpty())
                     <x-ui.empty-state
                         icon="calendar"
                         :title="__('ยังไม่มีรอบตัดบัตรที่กำลังจะถึง')"
                         :description="__('เมื่อลงทะเบียนค่าใช้จ่ายประจำ เช่น Adobe, Microsoft 365 หรือค่า Hosting รอบตัดเงินถัดไปจะแสดงที่นี่')"
                     />
+                @else
+                    <ul class="divide-y divide-slate-100" data-test="upcoming-charges">
+                        @foreach ($upcomingCharges as $charge)
+                            @php $days = $charge->daysUntilCharge($today); @endphp
+                            <li>
+                                <a href="{{ route('subscriptions.show', $charge) }}" wire:navigate class="flex items-center justify-between gap-3 py-3 hover:bg-slate-50">
+                                    <div class="min-w-0">
+                                        <p class="truncate font-medium text-slate-900">{{ $charge->name }}</p>
+                                        <p class="truncate text-xs text-slate-500">{{ $charge->creditCard->maskedNumber() }} · {{ $charge->responsible->name }}</p>
+                                    </div>
+                                    <div class="shrink-0 text-end">
+                                        <p class="text-sm font-semibold text-slate-900">{{ ThaiFormat::money($charge->estimated_amount, $charge->currency->value) }}</p>
+                                        <p @class(['text-xs', 'font-medium text-amber-600' => $days <= 7, 'text-slate-500' => $days > 7])>
+                                            {{ ThaiFormat::date($charge->next_charge_date) }} · {{ $charge->dueLabel($today) }}
+                                        </p>
+                                    </div>
+                                </a>
+                            </li>
+                        @endforeach
+                    </ul>
+                    <p class="mt-3 text-xs text-slate-500">ยอดเป็นประมาณการ ยอดที่ตัดจริงอาจต่างไป โดยเฉพาะรายการสกุลเงิน USD</p>
                 @endif
             </x-ui.card>
 
@@ -137,6 +178,20 @@
                         :description="__('ทุกอย่างเรียบร้อยดี')"
                         compact
                     />
+                @else
+                    <ul class="space-y-2" data-test="action-items">
+                        @foreach ($actionItems as $item)
+                            <li>
+                                <a href="{{ route('subscriptions.show', $item['subscription']) }}" wire:navigate class="flex items-start gap-3 rounded-lg bg-red-50/60 p-3 ring-1 ring-red-100 hover:bg-red-50">
+                                    <flux:icon icon="exclamation-triangle" class="mt-0.5 size-4 shrink-0 text-red-500" />
+                                    <span class="min-w-0">
+                                        <span class="block truncate text-sm font-medium text-slate-900">{{ $item['subscription']->name }}</span>
+                                        <span class="block text-xs text-red-700">{{ $item['label'] }}</span>
+                                    </span>
+                                </a>
+                            </li>
+                        @endforeach
+                    </ul>
                 @endif
             </x-ui.card>
         </div>

@@ -73,6 +73,7 @@ new #[Title('บัตรที่ใช้ชำระเงิน')] class ext
         $search = trim($this->search);
 
         return CreditCard::query()
+            ->withCount(['subscriptions as open_subscriptions_count' => fn (Builder $query) => $query->where('status', '!=', 'cancelled')])
             ->when($this->statusFilter() === 'active', fn (Builder $query) => $query->whereNull('deactivated_at'))
             ->when($this->statusFilter() === 'inactive', fn (Builder $query) => $query->whereNotNull('deactivated_at'))
             ->when($search !== '', function (Builder $query) use ($search) {
@@ -382,6 +383,13 @@ new #[Title('บัตรที่ใช้ชำระเงิน')] class ext
                                 @if ($card->notes)
                                     <p class="mt-1 line-clamp-2 text-xs text-slate-500">{{ $card->notes }}</p>
                                 @endif
+                                <p @class(['mt-1 text-xs', 'text-slate-500' => $card->isActive() || $card->open_subscriptions_count === 0, 'font-medium text-red-600' => ! $card->isActive() && $card->open_subscriptions_count > 0]) data-test="card-subscription-count">
+                                    @if ($card->open_subscriptions_count > 0)
+                                        ใช้กับ Subscription {{ $card->open_subscriptions_count }} รายการ{{ $card->isActive() ? '' : ' — ควรเปลี่ยนบัตร' }}
+                                    @else
+                                        ยังไม่มี Subscription ที่ใช้บัตรนี้
+                                    @endif
+                                </p>
                             </div>
                         </div>
 
@@ -405,7 +413,7 @@ new #[Title('บัตรที่ใช้ชำระเงิน')] class ext
                                                 icon="no-symbol"
                                                 variant="danger"
                                                 wire:click="deactivate({{ $card->id }})"
-                                                wire:confirm="ปิดใช้งานบัตร {{ $card->name }}? บัตรจะไม่ถูกเลือกใช้กับรายการใหม่ แต่ข้อมูลและประวัติเดิมยังอยู่ครบ"
+                                                wire:confirm="ปิดใช้งานบัตร {{ $card->name }}?{{ $card->open_subscriptions_count > 0 ? ' ⚠️ ยังมี Subscription '.$card->open_subscriptions_count.' รายการใช้บัตรนี้อยู่ ต้องเปลี่ยนบัตรของรายการเหล่านั้นด้วย มิฉะนั้นการตัดเงินอาจไม่ผ่าน' : '' }} บัตรจะเลือกใช้กับรายการใหม่ไม่ได้ แต่ข้อมูลและประวัติเดิมยังอยู่ครบ"
                                             >ปิดใช้งาน</flux:menu.item>
                                         @endcan
 
