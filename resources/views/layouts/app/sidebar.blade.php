@@ -18,6 +18,14 @@
                     </flux:sidebar.item>
                 </flux:sidebar.group>
 
+                @can('viewAny', \App\Models\CreditCard::class)
+                    <flux:sidebar.group :heading="__('การเงิน')" class="grid" data-test="finance-menu">
+                        <flux:sidebar.item icon="credit-card" :href="route('credit-cards.index')" :current="request()->routeIs('credit-cards.*')" wire:navigate>
+                            {{ __('บัตรที่ใช้ชำระเงิน') }}
+                        </flux:sidebar.item>
+                    </flux:sidebar.group>
+                @endcan
+
                 @can('viewAny', \App\Models\User::class)
                     <flux:sidebar.group :heading="__('ผู้ดูแลระบบ')" class="grid" data-test="admin-menu">
                         <flux:sidebar.item icon="users" :href="route('users.index')" :current="request()->routeIs('users.*')" wire:navigate>

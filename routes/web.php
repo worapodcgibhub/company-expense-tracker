@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\CreditCard;
 use App\Models\User;
 use Illuminate\Support\Facades\Route;
 
@@ -14,6 +15,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::livewire('users', 'pages::users.index')
         ->middleware('can:viewAny,'.User::class)
         ->name('users.index');
+
+    // Owner and Accountant may view; only the Owner manages (CreditCardPolicy).
+    Route::livewire('credit-cards', 'pages::credit-cards.index')
+        ->middleware('can:viewAny,'.CreditCard::class)
+        ->name('credit-cards.index');
 });
 
 require __DIR__.'/settings.php';
