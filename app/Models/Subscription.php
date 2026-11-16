@@ -3,9 +3,13 @@
 namespace App\Models;
 
 use App\Enums\BillingCycle;
+use App\Enums\ChargeOutcome;
+use App\Enums\ChargeRevisionAction;
 use App\Enums\Currency;
 use App\Enums\SubscriptionCategory;
 use App\Enums\SubscriptionStatus;
+use App\Exceptions\ChargeConflictException;
+use App\Support\BillingSchedule;
 use App\Support\ThaiFormat;
 use Carbon\CarbonImmutable;
 use Database\Factories\SubscriptionFactory;
@@ -18,6 +22,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use LogicException;
@@ -26,7 +31,8 @@ use LogicException;
  * A recurring service the company pays by card.
  *
  * - `estimated_amount` is the expected amount (minor units of `currency`).
- *   Actual charged amounts are recorded separately from Phase 2.4.
+ *   Actual charged amounts are SubscriptionCharge rows, created only by
+ *   recordCharge(), which also moves `next_charge_date` to the next cycle.
  * - `status` is not mass-assignable. It only changes through
  *   changeStatus(), which also writes a SubscriptionStatusChange row, so
  *   pausing or cancelling never loses history. Nothing is ever deleted.
@@ -276,6 +282,102 @@ class Subscription extends Model
     public function statusChanges(): HasMany
     {
         return $this->hasMany(SubscriptionStatusChange::class);
+    }
+
+    /**
+     * @return HasMany<SubscriptionCharge, $this>
+     */
+    public function charges(): HasMany
+    {
+        return $this->hasMany(SubscriptionCharge::class);
+    }
+
+    /**
+     * Whether the current cycle (next_charge_date) can be recorded today:
+     * active, and due within SubscriptionCharge::RECORD_AHEAD_DAYS days or
+     * already past. Overdue cycles are always recordable, one at a time.
+     */
+    public function canRecordChargeOn(?DateTimeInterface $today = null): bool
+    {
+        return $this->isActive()
+            && $this->daysUntilCharge($today) <= SubscriptionCharge::RECORD_AHEAD_DAYS;
+    }
+
+    /**
+     * Records what happened in the cycle due on $dueDate and moves
+     * next_charge_date to the following cycle, in one transaction.
+     *
+     * Guards against double recording: the subscription row is re-read
+     * inside the transaction (locked where the database supports it), the
+     * cycle must still be the current one, and the unique index on
+     * (subscription_id, due_date) is the final safety net.
+     *
+     * @param  array{outcome: ChargeOutcome, charged_on: ?DateTimeInterface, amount: int, amount_thb: ?int, credit_card_id: int, notes: ?string}  $values
+     *
+     * @throws ChargeConflictException
+     */
+    public function recordCharge(DateTimeInterface $dueDate, array $values, User $by, bool $confirmClosedPeriod = false): SubscriptionCharge
+    {
+        $dueDate = CarbonImmutable::instance($dueDate)->startOfDay();
+        $values = SubscriptionCharge::normalizeValues($values, $this->currency);
+
+        if ($values['outcome'] === ChargeOutcome::Charged && $values['charged_on'] === null) {
+            throw new LogicException('A charged cycle needs the date it was charged.');
+        }
+
+        $period = $values['charged_on'] !== null ? AccountingPeriodClosure::periodOf($values['charged_on']) : null;
+        $inClosed = $period !== null && AccountingPeriodClosure::isClosed($period);
+
+        if ($inClosed && ! $confirmClosedPeriod) {
+            throw new ChargeConflictException('วันที่ตัดเงินอยู่ในงวดบัญชีที่ปิดแล้ว ต้องยืนยันว่าเป็นรายการย้อนหลังก่อน');
+        }
+
+        $charge = DB::transaction(function () use ($dueDate, $values, $by, $inClosed) {
+            /** @var Subscription $current */
+            $current = self::query()->lockForUpdate()->findOrFail($this->id);
+
+            if (! $current->isActive()) {
+                throw new ChargeConflictException('Subscription นี้ไม่ได้อยู่ในสถานะใช้งาน จึงบันทึกยอดไม่ได้');
+            }
+
+            if (! $current->next_charge_date->isSameDay($dueDate)) {
+                throw new ChargeConflictException('รอบนี้ถูกบันทึกไปแล้ว หรือวันตัดบัตรถูกเปลี่ยน กรุณาโหลดหน้าใหม่แล้วตรวจอีกครั้ง');
+            }
+
+            if (! $current->canRecordChargeOn()) {
+                throw new ChargeConflictException('ยังไม่ถึงช่วงที่บันทึกยอดของรอบนี้ได้');
+            }
+
+            $charge = new SubscriptionCharge;
+            $charge->forceFill([
+                ...$values,
+                'subscription_id' => $current->id,
+                'due_date' => $dueDate,
+                'currency' => $current->currency,
+                'entered_after_close' => $inClosed,
+                'recorded_by' => $by->id,
+                'updated_by' => $by->id,
+            ]);
+
+            try {
+                $charge->save();
+            } catch (UniqueConstraintViolationException) {
+                throw new ChargeConflictException('รอบนี้ถูกบันทึกไปแล้ว กรุณาโหลดหน้าใหม่แล้วตรวจอีกครั้ง');
+            }
+
+            $charge->writeRevision(ChargeRevisionAction::Recorded, $by, SubscriptionCharge::storable($values), null, $inClosed);
+
+            $current->forceFill([
+                'next_charge_date' => BillingSchedule::next($dueDate, $current->billing_cycle, $current->billing_day),
+                'updated_by' => $by->id,
+            ])->save();
+
+            return $charge;
+        });
+
+        $this->refresh();
+
+        return $charge;
     }
 
     /**

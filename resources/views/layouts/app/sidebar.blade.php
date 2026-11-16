@@ -24,9 +24,21 @@
                             {{ auth()->user()->isOwner() || auth()->user()->isAccountant() ? __('Subscription') : __('Subscription ของฉัน') }}
                         </flux:sidebar.item>
 
+                        @can('viewAny', \App\Models\SubscriptionCharge::class)
+                            <flux:sidebar.item icon="receipt-percent" :href="route('charges.index')" :current="request()->routeIs('charges.*')" wire:navigate data-test="charges-menu">
+                                {{ __('รายการตัดเงิน') }}
+                            </flux:sidebar.item>
+                        @endcan
+
                         @can('viewAny', \App\Models\CreditCard::class)
                             <flux:sidebar.item icon="credit-card" :href="route('credit-cards.index')" :current="request()->routeIs('credit-cards.*')" wire:navigate data-test="credit-cards-menu">
                                 {{ __('บัตรที่ใช้ชำระเงิน') }}
+                            </flux:sidebar.item>
+                        @endcan
+
+                        @can('viewAny', \App\Models\AccountingPeriodClosure::class)
+                            <flux:sidebar.item icon="lock-closed" :href="route('accounting-periods.index')" :current="request()->routeIs('accounting-periods.*')" wire:navigate data-test="accounting-periods-menu">
+                                {{ __('งวดบัญชี') }}
                             </flux:sidebar.item>
                         @endcan
                     </flux:sidebar.group>

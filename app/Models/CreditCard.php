@@ -118,6 +118,16 @@ class CreditCard extends Model
     }
 
     /**
+     * Actual charges made on this card.
+     *
+     * @return HasMany<SubscriptionCharge, $this>
+     */
+    public function charges(): HasMany
+    {
+        return $this->hasMany(SubscriptionCharge::class);
+    }
+
+    /**
      * @return BelongsTo<User, $this>
      */
     public function creator(): BelongsTo

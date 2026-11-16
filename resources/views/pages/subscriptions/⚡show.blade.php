@@ -56,6 +56,17 @@ new #[Title('Subscription')] class extends Component {
     }
 
     /**
+     * Actual charges, newest cycle first.
+     *
+     * @return Collection<int, \App\Models\SubscriptionCharge>
+     */
+    #[Computed]
+    public function charges(): Collection
+    {
+        return $this->subscription->charges()->with('recorder')->orderByDesc('due_date')->get();
+    }
+
+    /**
      * @return list<CarbonImmutable>
      */
     #[Computed]
@@ -278,7 +289,7 @@ new #[Title('Subscription')] class extends Component {
                 <div>
                     <dt class="text-sm text-slate-500">ยอดประมาณการ</dt>
                     <dd class="mt-0.5 text-lg font-semibold text-slate-900">{{ $s->amountLabel() }}</dd>
-                    <dd class="text-xs text-slate-500">ยอดตัดจริงจะบันทึกแยกในขั้นตอนยืนยันยอด</dd>
+                    <dd class="text-xs text-slate-500">ยอดตัดจริงดูได้ที่ "ประวัติการตัดเงินจริง" ด้านล่าง</dd>
                 </div>
                 <div>
                     <dt class="text-sm text-slate-500">วันตัดบัตรครั้งถัดไป</dt>
@@ -339,10 +350,49 @@ new #[Title('Subscription')] class extends Component {
         </x-ui.card>
     </div>
 
-    {{-- Actual charges: Phase 2.4 --}}
+    {{-- Actual charges (SubscriptionCharge) --}}
     <x-ui.card>
-        <x-ui.section-header title="ประวัติการตัดเงินจริง" icon="receipt-percent" />
-        <x-ui.empty-state icon="receipt-percent" tone="cyan" title="ยังไม่มีการบันทึกยอดตัดจริง" description="การยืนยันยอดที่ตัดจริงและส่งให้ฝ่ายบัญชีจะเปิดใช้ในระยะถัดไป" compact />
+        <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <x-ui.section-header title="ประวัติการตัดเงินจริง" description="ยอดที่บัตรถูกตัดจริงในแต่ละรอบ" icon="receipt-percent" class="!mb-0" />
+            @can('create', [\App\Models\SubscriptionCharge::class, $s])
+                @if ($s->canRecordChargeOn())
+                    <flux:button icon="plus" variant="primary" size="sm" :href="route('charges.create', $s)" wire:navigate data-test="record-charge-button">
+                        บันทึกยอดตัดจริง (รอบ {{ ThaiFormat::date($s->next_charge_date) }})
+                    </flux:button>
+                @else
+                    <flux:text class="text-xs" data-test="record-charge-later">บันทึกรอบ {{ ThaiFormat::date($s->next_charge_date) }} ได้ตั้งแต่ {{ ThaiFormat::date($s->next_charge_date->subDays(\App\Models\SubscriptionCharge::RECORD_AHEAD_DAYS)) }}</flux:text>
+                @endif
+            @endcan
+        </div>
+
+        @if ($this->charges->isEmpty())
+            <x-ui.empty-state icon="receipt-percent" tone="cyan" title="ยังไม่มีการบันทึกยอดตัดจริง" description="เมื่อบัตรถูกตัดเงินแล้ว ให้บันทึกยอดจริงของรอบนั้น ระบบจะเลื่อนวันตัดบัตรครั้งถัดไปให้อัตโนมัติ" compact />
+        @else
+            <ul class="divide-y divide-slate-100" data-test="charge-list">
+                @foreach ($this->charges as $charge)
+                    <li wire:key="charge-{{ $charge->id }}">
+                        <a href="{{ route('charges.show', $charge) }}" wire:navigate class="flex flex-col gap-2 py-3 hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between">
+                            <div class="min-w-0 text-sm">
+                                <p class="font-medium text-slate-900">รอบ {{ ThaiFormat::date($charge->due_date) }}</p>
+                                <p class="text-slate-500">
+                                    {{ $charge->charged_on ? 'ตัดเงิน '.ThaiFormat::date($charge->charged_on) : $charge->outcome->label() }}
+                                    · บันทึกโดย {{ $charge->recorder?->name ?? '–' }} {{ ThaiFormat::date($charge->created_at) }}
+                                </p>
+                            </div>
+                            <div class="flex flex-col gap-1 sm:items-end">
+                                <p class="font-semibold text-slate-900">
+                                    {{ $charge->amountLabel() }}
+                                    @if ($charge->isCharged() && $charge->amount_thb !== null)
+                                        <span class="text-sm font-normal text-slate-500">({{ ThaiFormat::money($charge->amount_thb) }})</span>
+                                    @endif
+                                </p>
+                                <div class="flex flex-wrap gap-2 sm:justify-end"><x-charge-badges :charge="$charge" /></div>
+                            </div>
+                        </a>
+                    </li>
+                @endforeach
+            </ul>
+        @endif
     </x-ui.card>
 
     {{-- Status history --}}

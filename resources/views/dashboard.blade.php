@@ -5,35 +5,39 @@
     $today = now();
 
     /*
-     * Dashboard data. No sample data anywhere.
-     * - Subscriptions (Phase 2.3) are real, limited to what this user may see
-     *   (Staff: only their own). Amounts are ESTIMATES, totalled per currency.
-     * - Actual expenses do not exist yet (Phase 2.4+): those values stay zero /
-     *   empty until their phase ships.
+     * Dashboard data. No sample data anywhere. Everything is limited to what
+     * this user may see (Staff: only subscriptions they are responsible for).
+     * - Subscriptions: amounts are ESTIMATES, totalled per currency.
+     * - Actual charges (Phase 2.4): baht totals use the baht actually paid
+     *   (THB amount, or the USD charge's amount_thb). USD is never added to
+     *   baht; USD charges still waiting for their baht amount are listed
+     *   apart. Closed months on the chart show their closing figure.
+     * - Receipts arrive in Phase 2.5: "missing receipt" stays zero until then.
      */
     $subscriptions = new \App\Support\SubscriptionOverview($user, $today);
+    $charges = new \App\Support\ChargeOverview($user, $today);
     $monthlyEstimate = $subscriptions->monthlyEstimateByCurrency();
+    $thisMonth = $charges->monthSummary();
 
     $summary = [
-        'month_total' => 0,      // minor units (satang)
-        'recorded_count' => 0,
+        'month_total' => $thisMonth['thb_total'],      // minor units (satang)
+        'month_missing_thb_count' => $thisMonth['missing_thb_count'],
+        'month_missing_thb_usd' => $thisMonth['missing_thb_usd'],
+        'recorded_count' => $thisMonth['charge_count'],
         'upcoming_7d_count' => $subscriptions->upcoming(7)->count(),
         'missing_receipt_count' => 0,
     ];
     $upcomingCharges = $subscriptions->upcoming(30);
     $actionItems = $subscriptions->overdue()
-        ->map(fn ($s) => ['subscription' => $s, 'label' => $s->dueLabel($today), 'tone' => 'red'])
-        ->concat($subscriptions->needingNewCard()->map(fn ($s) => ['subscription' => $s, 'label' => 'บัตรถูกปิดใช้งาน ต้องเปลี่ยนบัตร', 'tone' => 'red']))
+        ->map(fn ($s) => ['url' => route('subscriptions.show', $s), 'name' => $s->name, 'label' => $s->dueLabel($today).' · ยังไม่บันทึกยอดตัดจริง'])
+        ->concat($subscriptions->needingNewCard()->map(fn ($s) => ['url' => route('subscriptions.show', $s), 'name' => $s->name, 'label' => 'บัตรถูกปิดใช้งาน ต้องเปลี่ยนบัตร']))
+        ->concat($charges->afterCloseUnverified()->map(fn ($c) => ['url' => route('charges.show', $c), 'name' => $c->subscription->name, 'label' => 'รายการย้อนหลังในงวดที่ปิดแล้ว รอฝ่ายบัญชีตรวจ']))
         ->values();
-    $recentExpenses = collect();
-    $categoryBreakdown = [];
-    $monthlyTotals = collect(ThaiFormat::recentMonths(6, $today))
-        ->map(fn ($month) => [
-            'label' => ThaiFormat::monthShort($month),
-            'value' => 0,
-            'current' => $month->isSameMonth($today),
-        ])
-        ->all();
+    $missingThb = $charges->missingThb();
+    $recentExpenses = $charges->recent(5);
+    $categoryBreakdown = $charges->categoryBreakdown();
+    $monthlyTotals = $charges->monthlySeries(6);
+    $hasClosedMonths = collect($monthlyTotals)->contains('closed', true);
 
     $needsTwoFactor = \Laravel\Fortify\Features::canManageTwoFactorAuthentication()
         && is_null($user->two_factor_confirmed_at);
@@ -84,14 +88,16 @@
             <x-ui.stat-card
                 :title="__('ค่าใช้จ่ายเดือนนี้')"
                 :value="ThaiFormat::money($summary['month_total'])"
-                :hint="ThaiFormat::monthYear($today)"
+                :hint="$summary['month_missing_thb_count'] > 0
+                    ? ThaiFormat::monthYear($today).' · ยังไม่รวม USD '.$summary['month_missing_thb_count'].' รายการ ('.ThaiFormat::money($summary['month_missing_thb_usd'], 'USD').') ที่รอยอดบาท'
+                    : ThaiFormat::monthYear($today)"
                 icon="banknotes"
                 tone="indigo"
             />
             <x-ui.stat-card
                 :title="__('บันทึกแล้วเดือนนี้')"
                 :value="number_format($summary['recorded_count']).' '.__('รายการ')"
-                :hint="__('ค่าใช้จ่ายที่ยืนยันยอดจริงแล้ว')"
+                :hint="__('รายการที่บันทึกยอดตัดจริงแล้ว')"
                 icon="clipboard-document-check"
                 tone="cyan"
             />
@@ -182,10 +188,10 @@
                     <ul class="space-y-2" data-test="action-items">
                         @foreach ($actionItems as $item)
                             <li>
-                                <a href="{{ route('subscriptions.show', $item['subscription']) }}" wire:navigate class="flex items-start gap-3 rounded-lg bg-red-50/60 p-3 ring-1 ring-red-100 hover:bg-red-50">
+                                <a href="{{ $item['url'] }}" wire:navigate class="flex items-start gap-3 rounded-lg bg-red-50/60 p-3 ring-1 ring-red-100 hover:bg-red-50">
                                     <flux:icon icon="exclamation-triangle" class="mt-0.5 size-4 shrink-0 text-red-500" />
                                     <span class="min-w-0">
-                                        <span class="block truncate text-sm font-medium text-slate-900">{{ $item['subscription']->name }}</span>
+                                        <span class="block truncate text-sm font-medium text-slate-900">{{ $item['name'] }}</span>
                                         <span class="block text-xs text-red-700">{{ $item['label'] }}</span>
                                     </span>
                                 </a>
@@ -201,13 +207,17 @@
             <x-ui.card class="lg:col-span-2">
                 <x-ui.section-header
                     :title="__('ค่าใช้จ่ายรายเดือน')"
-                    :description="__('ยอดที่ยืนยันแล้วย้อนหลัง 6 เดือน (บาท)')"
+                    :description="__('ยอดเงินบาทที่ตัดจริงย้อนหลัง 6 เดือน')"
                     icon="chart-bar"
                 />
                 <x-ui.bar-chart
                     :items="$monthlyTotals"
                     :empty-description="__('กราฟจะแสดงเมื่อมีการบันทึกค่าใช้จ่ายจริง')"
                 />
+                <p class="mt-3 text-xs text-slate-500">
+                    ไม่รวมรายการ USD ที่ยังไม่มียอดเงินบาท
+                    @if ($hasClosedMonths) · เดือนที่ปิดงวดแล้วแสดงยอด ณ วันปิดงวด @endif
+                </p>
             </x-ui.card>
 
             <x-ui.card>
@@ -236,9 +246,59 @@
                     icon="receipt-percent"
                     tone="cyan"
                     :title="__('ยังไม่มีการบันทึกค่าใช้จ่าย')"
-                    :description="__('เมื่อยืนยันยอดตัดบัตรหรือบันทึกค่าใช้จ่าย รายการจะแสดงที่นี่พร้อมสถานะใบเสร็จ')"
+                    :description="__('เมื่อบันทึกยอดตัดบัตรจริง รายการจะแสดงที่นี่')"
                 />
+            @else
+                <ul class="divide-y divide-slate-100" data-test="recent-expenses">
+                    @foreach ($recentExpenses as $expense)
+                        <li>
+                            <a href="{{ route('charges.show', $expense) }}" wire:navigate class="flex flex-col gap-1 py-3 hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between">
+                                <div class="min-w-0">
+                                    <p class="truncate font-medium text-slate-900">{{ $expense->subscription->name }}</p>
+                                    <p class="truncate text-xs text-slate-500">
+                                        {{ $expense->charged_on ? ThaiFormat::date($expense->charged_on) : 'รอบ '.ThaiFormat::date($expense->due_date) }}
+                                        · {{ $expense->creditCard->maskedNumber() }}
+                                    </p>
+                                </div>
+                                <div class="flex flex-col gap-1 sm:items-end">
+                                    <p class="text-sm font-semibold text-slate-900">
+                                        {{ $expense->amountLabel() }}
+                                        @if ($expense->isCharged() && $expense->amount_thb !== null)
+                                            <span class="font-normal text-slate-500">({{ ThaiFormat::money($expense->amount_thb) }})</span>
+                                        @endif
+                                    </p>
+                                    <div class="flex flex-wrap gap-1 sm:justify-end"><x-charge-badges :charge="$expense" /></div>
+                                </div>
+                            </a>
+                        </li>
+                    @endforeach
+                </ul>
+                <a href="{{ route('charges.index') }}" wire:navigate class="mt-3 inline-block text-sm font-medium text-indigo-600 hover:text-indigo-700">ดูรายการตัดเงินทั้งหมด →</a>
             @endif
         </x-ui.card>
+
+        {{-- USD charges still waiting for the baht amount (not in any baht total) --}}
+        @if ($missingThb->isNotEmpty())
+            <x-ui.card data-test="missing-thb">
+                <x-ui.section-header
+                    :title="__('รายการ USD ที่รอยอดเงินบาท')"
+                    :description="__('ยังไม่นับรวมในยอดเงินบาท กรอกยอดบาทจากใบแจ้งยอดบัตรเมื่อได้รับ')"
+                    icon="currency-dollar"
+                />
+                <ul class="divide-y divide-slate-100">
+                    @foreach ($missingThb as $pending)
+                        <li>
+                            <a href="{{ route('charges.show', $pending) }}" wire:navigate class="flex items-center justify-between gap-3 py-3 hover:bg-slate-50">
+                                <span class="min-w-0">
+                                    <span class="block truncate text-sm font-medium text-slate-900">{{ $pending->subscription->name }}</span>
+                                    <span class="block text-xs text-slate-500">ตัดเงิน {{ ThaiFormat::date($pending->charged_on ?? $pending->due_date) }}</span>
+                                </span>
+                                <span class="shrink-0 text-sm font-semibold text-amber-700">{{ $pending->amountLabel() }}</span>
+                            </a>
+                        </li>
+                    @endforeach
+                </ul>
+            </x-ui.card>
+        @endif
     </div>
 </x-layouts::app>

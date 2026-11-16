@@ -1,0 +1,409 @@
+<?php
+
+namespace App\Models;
+
+use App\Enums\ChargeOutcome;
+use App\Enums\ChargeRevisionAction;
+use App\Enums\Currency;
+use App\Exceptions\ChargeConflictException;
+use App\Support\ThaiFormat;
+use Carbon\CarbonImmutable;
+use Database\Factories\SubscriptionChargeFactory;
+use DateTimeInterface;
+use Illuminate\Database\Eloquent\Attributes\Scope;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
+
+/**
+ * What actually happened in one billing cycle of a subscription.
+ *
+ * - One row per cycle: (subscription_id, due_date) is unique. New rows are
+ *   only created by Subscription::recordCharge().
+ * - `amount` is in minor units of `currency` (the vendor's currency).
+ *   For USD, `amount_thb` is the baht the bank actually took; it may be
+ *   filled in later. THB and USD are never added together: baht totals use
+ *   thbAmount(), and USD charges without `amount_thb` are reported apart.
+ * - Never deleted. Every change goes through revise() / verify() /
+ *   unverify(), which write a SubscriptionChargeRevision row (who, when,
+ *   old → new values).
+ * - `entered_after_close` is set (and stays set) when the charge was
+ *   recorded or changed while its month was a closed accounting period.
+ *   The closed period itself is never changed.
+ *
+ * @property int $id
+ * @property int $subscription_id
+ * @property int $credit_card_id
+ * @property CarbonImmutable $due_date
+ * @property ChargeOutcome $outcome
+ * @property CarbonImmutable|null $charged_on
+ * @property Currency $currency
+ * @property int $amount
+ * @property int|null $amount_thb
+ * @property bool $entered_after_close
+ * @property string|null $notes
+ * @property CarbonImmutable|null $verified_at
+ * @property int|null $verified_by
+ * @property int|null $recorded_by
+ * @property int|null $updated_by
+ * @property CarbonImmutable|null $created_at
+ * @property CarbonImmutable|null $updated_at
+ * @property-read Subscription $subscription
+ * @property-read CreditCard $creditCard
+ * @property-read User|null $recorder
+ * @property-read User|null $updater
+ * @property-read User|null $verifier
+ */
+class SubscriptionCharge extends Model
+{
+    /** @use HasFactory<SubscriptionChargeFactory> */
+    use HasFactory;
+
+    /**
+     * A cycle may be recorded from this many days before its due date
+     * (vendors sometimes charge a little early).
+     */
+    public const RECORD_AHEAD_DAYS = 7;
+
+    /**
+     * The actual charge date may be at most this many days before the due
+     * date of its cycle. Any later date up to today is fine (backdating).
+     */
+    public const MAX_DAYS_BEFORE_DUE = 31;
+
+    /**
+     * Fields a person can change after recording (due_date never changes:
+     * it identifies the cycle).
+     */
+    public const EDITABLE = ['outcome', 'charged_on', 'amount', 'amount_thb', 'credit_card_id', 'notes'];
+
+    /**
+     * Changing any of these takes back the accountant's verification.
+     */
+    private const VERIFIED_FIELDS = ['outcome', 'charged_on', 'amount', 'amount_thb', 'credit_card_id'];
+
+    /**
+     * @var array<string, mixed>
+     */
+    protected $attributes = [
+        'amount' => 0,
+        'entered_after_close' => false,
+    ];
+
+    /**
+     * @return array<string, string>
+     */
+    protected function casts(): array
+    {
+        return [
+            'due_date' => 'date',
+            'outcome' => ChargeOutcome::class,
+            'charged_on' => 'date',
+            'currency' => Currency::class,
+            'amount' => 'integer',
+            'amount_thb' => 'integer',
+            'entered_after_close' => 'boolean',
+            'verified_at' => 'datetime',
+        ];
+    }
+
+    public function isCharged(): bool
+    {
+        return $this->outcome === ChargeOutcome::Charged;
+    }
+
+    public function isVerified(): bool
+    {
+        return $this->verified_at !== null;
+    }
+
+    /**
+     * A USD charge whose baht amount has not been filled in yet.
+     */
+    public function needsThbAmount(): bool
+    {
+        return $this->isCharged() && $this->currency !== Currency::THB && $this->amount_thb === null;
+    }
+
+    /**
+     * The baht actually paid (satang), or null when not known yet.
+     * Skipped cycles cost nothing.
+     */
+    public function thbAmount(): ?int
+    {
+        if (! $this->isCharged()) {
+            return 0;
+        }
+
+        return $this->currency === Currency::THB ? $this->amount : $this->amount_thb;
+    }
+
+    /**
+     * Accounting period ("YYYY-MM") the charge belongs to; null when skipped.
+     */
+    public function period(): ?string
+    {
+        return $this->isCharged() && $this->charged_on !== null
+            ? AccountingPeriodClosure::periodOf($this->charged_on)
+            : null;
+    }
+
+    /**
+     * "$52.00" or "รอบนี้ไม่ถูกตัดเงิน".
+     */
+    public function amountLabel(): string
+    {
+        return $this->isCharged()
+            ? ThaiFormat::money($this->amount, $this->currency->value)
+            : ChargeOutcome::Skipped->label();
+    }
+
+    /**
+     * Whole days between the charge date and the day it was recorded.
+     */
+    public function daysRecordedLate(): int
+    {
+        if ($this->charged_on === null || $this->created_at === null) {
+            return 0;
+        }
+
+        return max(0, (int) $this->charged_on->startOfDay()->diffInDays($this->created_at->startOfDay(), false));
+    }
+
+    /**
+     * Applies a person's correction and records old → new values.
+     * Returns false (and writes nothing) when nothing actually changed.
+     *
+     * @param  array{outcome: ChargeOutcome, charged_on: ?DateTimeInterface, amount: int, amount_thb: ?int, credit_card_id: int, notes: ?string}  $values
+     *
+     * @throws ChargeConflictException when a closed period is involved and not confirmed
+     */
+    public function revise(array $values, User $by, string $reason, bool $confirmClosedPeriod = false): bool
+    {
+        $values = self::normalizeValues($values, $this->currency);
+        $before = $this->editableSnapshot();
+        $after = self::storable($values);
+
+        $changes = [];
+        foreach (self::EDITABLE as $field) {
+            if ($before[$field] !== $after[$field]) {
+                $changes[$field] = [$before[$field], $after[$field]];
+            }
+        }
+
+        if ($changes === []) {
+            return false;
+        }
+
+        $periods = array_filter([$this->period(), $values['charged_on'] !== null && $values['outcome'] === ChargeOutcome::Charged ? AccountingPeriodClosure::periodOf($values['charged_on']) : null]);
+        $inClosed = AccountingPeriodClosure::closedAmong(array_values($periods)) !== [];
+
+        if ($inClosed && ! $confirmClosedPeriod) {
+            throw new ChargeConflictException('รายการนี้อยู่ในงวดบัญชีที่ปิดแล้ว ต้องยืนยันว่าเป็นการแก้ไขย้อนหลังก่อน');
+        }
+
+        DB::transaction(function () use ($values, $by, $reason, $changes, $inClosed) {
+            $clearsVerification = $this->isVerified() && array_intersect(array_keys($changes), self::VERIFIED_FIELDS) !== [];
+
+            if ($clearsVerification) {
+                $changes['verified'] = [true, false];
+            }
+
+            $this->forceFill([
+                ...$values,
+                'updated_by' => $by->id,
+                'entered_after_close' => $this->entered_after_close || $inClosed,
+                ...($clearsVerification ? ['verified_at' => null, 'verified_by' => null] : []),
+            ])->save();
+
+            $this->writeRevision(ChargeRevisionAction::Updated, $by, $changes, $reason, $inClosed);
+        });
+
+        return true;
+    }
+
+    /**
+     * Accountant's check. Writes a revision row.
+     */
+    public function verify(User $by): void
+    {
+        if ($this->isVerified()) {
+            return;
+        }
+
+        DB::transaction(function () use ($by) {
+            $this->forceFill(['verified_at' => now(), 'verified_by' => $by->id])->save();
+            $this->writeRevision(ChargeRevisionAction::Verified, $by, null, null, false);
+        });
+    }
+
+    public function unverify(User $by, ?string $reason = null): void
+    {
+        if (! $this->isVerified()) {
+            return;
+        }
+
+        DB::transaction(function () use ($by, $reason) {
+            $this->forceFill(['verified_at' => null, 'verified_by' => null])->save();
+            $this->writeRevision(ChargeRevisionAction::Unverified, $by, null, $reason, false);
+        });
+    }
+
+    /**
+     * @param  array<string, array{0: mixed, 1: mixed}>|array<string, mixed>|null  $changes
+     */
+    public function writeRevision(ChargeRevisionAction $action, User $by, ?array $changes, ?string $reason, bool $inClosedPeriod): SubscriptionChargeRevision
+    {
+        return $this->revisions()->create([
+            'action' => $action,
+            'diff' => $changes,
+            'reason' => $reason === null || trim($reason) === '' ? null : trim($reason),
+            'in_closed_period' => $inClosedPeriod,
+            'changed_by' => $by->id,
+        ]);
+    }
+
+    /**
+     * Makes the values consistent: a skipped cycle has no date or amount,
+     * and only non-THB charges carry a separate baht amount.
+     *
+     * @param  array{outcome: ChargeOutcome, charged_on: ?DateTimeInterface, amount: int, amount_thb: ?int, credit_card_id: int, notes: ?string}  $values
+     * @return array{outcome: ChargeOutcome, charged_on: ?CarbonImmutable, amount: int, amount_thb: ?int, credit_card_id: int, notes: ?string}
+     */
+    public static function normalizeValues(array $values, Currency $currency): array
+    {
+        $charged = $values['outcome'] === ChargeOutcome::Charged;
+        $notes = $values['notes'] === null || trim($values['notes']) === '' ? null : trim($values['notes']);
+
+        return [
+            'outcome' => $values['outcome'],
+            'charged_on' => $charged && $values['charged_on'] !== null ? CarbonImmutable::instance($values['charged_on'])->startOfDay() : null,
+            'amount' => $charged ? $values['amount'] : 0,
+            'amount_thb' => $charged && $currency !== Currency::THB ? $values['amount_thb'] : null,
+            'credit_card_id' => $values['credit_card_id'],
+            'notes' => $notes,
+        ];
+    }
+
+    /**
+     * Plain values (as stored) for the revision history.
+     *
+     * @param  array{outcome: ChargeOutcome, charged_on: ?CarbonImmutable, amount: int, amount_thb: ?int, credit_card_id: int, notes: ?string}  $values
+     * @return array<string, string|int|null>
+     */
+    public static function storable(array $values): array
+    {
+        return [
+            'outcome' => $values['outcome']->value,
+            'charged_on' => $values['charged_on']?->format('Y-m-d'),
+            'amount' => $values['amount'],
+            'amount_thb' => $values['amount_thb'],
+            'credit_card_id' => $values['credit_card_id'],
+            'notes' => $values['notes'],
+        ];
+    }
+
+    /**
+     * @return array<string, string|int|null>
+     */
+    public function editableSnapshot(): array
+    {
+        return [
+            'outcome' => $this->outcome->value,
+            'charged_on' => $this->charged_on?->format('Y-m-d'),
+            'amount' => $this->amount,
+            'amount_thb' => $this->amount_thb,
+            'credit_card_id' => $this->credit_card_id,
+            'notes' => $this->notes,
+        ];
+    }
+
+    /**
+     * @return BelongsTo<Subscription, $this>
+     */
+    public function subscription(): BelongsTo
+    {
+        return $this->belongsTo(Subscription::class);
+    }
+
+    /**
+     * @return BelongsTo<CreditCard, $this>
+     */
+    public function creditCard(): BelongsTo
+    {
+        return $this->belongsTo(CreditCard::class);
+    }
+
+    /**
+     * @return BelongsTo<User, $this>
+     */
+    public function recorder(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'recorded_by');
+    }
+
+    /**
+     * @return BelongsTo<User, $this>
+     */
+    public function updater(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'updated_by');
+    }
+
+    /**
+     * @return BelongsTo<User, $this>
+     */
+    public function verifier(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'verified_by');
+    }
+
+    /**
+     * @return HasMany<SubscriptionChargeRevision, $this>
+     */
+    public function revisions(): HasMany
+    {
+        return $this->hasMany(SubscriptionChargeRevision::class);
+    }
+
+    /**
+     * Same rule as Subscription::visibleTo: Owner and Accountant see every
+     * charge, anyone else only charges of subscriptions they are
+     * responsible for. Always use this for listings and totals.
+     *
+     * @param  Builder<SubscriptionCharge>  $query
+     */
+    #[Scope]
+    protected function visibleTo(Builder $query, User $user): void
+    {
+        if (! ($user->isOwner() || $user->isAccountant())) {
+            $query->whereIn('subscription_id', Subscription::query()->select('id')->where('responsible_user_id', $user->id));
+        }
+    }
+
+    /**
+     * @param  Builder<SubscriptionCharge>  $query
+     */
+    #[Scope]
+    protected function charged(Builder $query): void
+    {
+        $query->where('outcome', ChargeOutcome::Charged->value);
+    }
+
+    /**
+     * Charged in the calendar month of $month.
+     *
+     * @param  Builder<SubscriptionCharge>  $query
+     */
+    #[Scope]
+    protected function chargedInMonth(Builder $query, DateTimeInterface $month): void
+    {
+        $start = CarbonImmutable::instance($month)->startOfMonth();
+
+        $query->where('outcome', ChargeOutcome::Charged->value)
+            ->whereBetween('charged_on', [$start->format('Y-m-d'), $start->endOfMonth()->format('Y-m-d')]);
+    }
+}

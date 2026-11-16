@@ -1,7 +1,9 @@
 <?php
 
+use App\Models\AccountingPeriodClosure;
 use App\Models\CreditCard;
 use App\Models\Subscription;
+use App\Models\SubscriptionCharge;
 use App\Models\User;
 use Illuminate\Support\Facades\Route;
 
@@ -38,6 +40,31 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->middleware('can:update,subscription')
         ->whereNumber('subscription')
         ->name('subscriptions.edit');
+
+    // Actual charges (SubscriptionChargePolicy): everyone opens the list
+    // (Staff see only their own subscriptions' charges); only the Owner
+    // records or corrects. Recording is authorized again in the page,
+    // because it also needs the subscription to be active.
+    Route::livewire('subscriptions/{subscription}/charges/create', 'pages::charges.form')
+        ->middleware('can:view,subscription')
+        ->whereNumber('subscription')
+        ->name('charges.create');
+    Route::livewire('charges', 'pages::charges.index')
+        ->middleware('can:viewAny,'.SubscriptionCharge::class)
+        ->name('charges.index');
+    Route::livewire('charges/{charge}', 'pages::charges.show')
+        ->middleware('can:view,charge')
+        ->whereNumber('charge')
+        ->name('charges.show');
+    Route::livewire('charges/{charge}/edit', 'pages::charges.form')
+        ->middleware('can:update,charge')
+        ->whereNumber('charge')
+        ->name('charges.edit');
+
+    // Owner and Accountant (AccountingPeriodClosurePolicy).
+    Route::livewire('accounting-periods', 'pages::accounting-periods.index')
+        ->middleware('can:viewAny,'.AccountingPeriodClosure::class)
+        ->name('accounting-periods.index');
 });
 
 require __DIR__.'/settings.php';
