@@ -1,11 +1,16 @@
 <?php
 
+use App\Enums\BillingCycle;
 use App\Enums\ChargeRevisionAction;
 use App\Enums\Currency;
+use App\Enums\PaymentMethodType;
 use App\Enums\ReceiptStatus;
+use App\Enums\SettlementMode;
 use App\Enums\SubscriptionStatus;
+use App\Models\BankAccount;
 use App\Models\ChargeReceipt;
 use App\Models\CreditCard;
+use App\Models\PaymentMethod;
 use App\Models\Subscription;
 use App\Models\SubscriptionCharge;
 use App\Models\SubscriptionChargeRevision;
@@ -36,6 +41,8 @@ function sampleCounts(): array
     return [
         'users' => User::count(),
         'cards' => CreditCard::count(),
+        'accounts' => BankAccount::count(),
+        'methods' => PaymentMethod::count(),
         'subscriptions' => Subscription::count(),
         'charges' => SubscriptionCharge::count(),
         'revisions' => SubscriptionChargeRevision::count(),
@@ -51,7 +58,7 @@ test('it adds the sample subscriptions with about six months of history, using t
     $subscriptions = Subscription::all();
 
     expect($subscriptions)->toHaveCount(count($catalog))
-        ->and(count($catalog))->toBeGreaterThanOrEqual(10)->toBeLessThanOrEqual(15)
+        ->and(count($catalog))->toBe(8)
         ->and($subscriptions->every(fn ($s) => $s->notes === SampleDataSeeder::MARKER))->toBeTrue()
         ->and($subscriptions->pluck('responsible_user_id')->unique()->all())->toBe([$this->owner->id])
         ->and($subscriptions->pluck('credit_card_id')->unique()->all())->toBe([$this->card->id])
@@ -62,7 +69,7 @@ test('it adds the sample subscriptions with about six months of history, using t
     $charges = SubscriptionCharge::query()->charged()->get();
     $months = $charges->map(fn ($c) => $c->charged_on->format('Y-m'))->unique();
 
-    expect($charges->count())->toBeGreaterThan(50)
+    expect($charges->count())->toBeGreaterThan(30)
         ->and($months->count())->toBeGreaterThanOrEqual(6)
         ->and($charges->pluck('currency')->unique()->map->value->sort()->values()->all())->toBe(['THB', 'USD'])
         // Nothing in the future, nothing older than ~7 months.
@@ -168,8 +175,8 @@ test('the pages show the sample data', function () {
         ->assertSee('data-test="missing-thb"', false)
         ->assertDontSee('กราฟจะแสดงเมื่อมีการบันทึกค่าใช้จ่ายจริง');
 
-    $this->get(route('subscriptions.index', ['status' => 'all']))->assertOk()->assertSee('Google Workspace Business Standard')->assertSee('Zoom Pro');
-    $this->get(route('charges.index'))->assertOk()->assertSee('data-test="charge-list"', false);
+    $this->get(route('subscriptions.index', ['status' => 'all']))->assertOk()->assertSee('ChatGPT Plus')->assertSee('ค่า AI สำหรับคอนเทนต์');
+    $this->get(route('charges.index', ['month' => 'all']))->assertOk()->assertSee('data-test="charge-list"', false);
     $this->get(route('charges.index', ['receipt' => 'waiting', 'month' => 'all']))->assertOk()->assertSee('data-test="receipt-waiting-badge"', false);
     $this->get(route('accounting-periods.index'))->assertOk()->assertSee('รอใบเสร็จ');
 
@@ -221,4 +228,153 @@ test('the clock is put back after seeding', function () {
     $this->seed(SampleDataSeeder::class);
 
     expect(now()->format('Y-m-d H:i'))->toBe('2026-11-15 10:00');
+});
+
+/*
+|--------------------------------------------------------------------------
+| Phase 3.1: sample bank accounts and payment methods
+|--------------------------------------------------------------------------
+*/
+
+test('it adds two sample bank accounts and four payment methods with last four digits only', function () {
+    $this->seed(SampleDataSeeder::class);
+
+    $accounts = BankAccount::query()->orderBy('id')->get();
+    $methods = PaymentMethod::query()->whereNotNull('name')->where('name', 'like', '%(ตัวอย่าง)')->get()->keyBy('name');
+
+    expect($accounts->pluck('last_four')->all())->toBe(['5678', '9012'])
+        ->and($accounts->every(fn ($a) => $a->notes === SampleDataSeeder::MARKER && strlen($a->last_four) === 4))->toBeTrue()
+        ->and($methods)->toHaveCount(4)
+        ->and($methods['โอนเงินผ่านธนาคาร KBank (ตัวอย่าง)']->bank_account_id)->toBe($accounts[0]->id)
+        ->and($methods['โอนเงินผ่านธนาคาร KBank (ตัวอย่าง)']->type)->toBe(PaymentMethodType::BankTransfer)
+        ->and($methods['PromptPay / QR ผ่านบัญชี SCB (ตัวอย่าง)']->bank_account_id)->toBe($accounts[1]->id)
+        ->and($methods['หักบัญชีอัตโนมัติ KBank (ตัวอย่าง)']->type)->toBe(PaymentMethodType::DirectDebit)
+        ->and($methods['หักบัญชีอัตโนมัติ KBank (ตัวอย่าง)']->settlement)->toBe(SettlementMode::Auto)
+        ->and($methods['เงินสดย่อยสำนักงาน (ตัวอย่าง)']->bank_account_id)->toBeNull()
+        ->and($methods->every(fn ($m) => $m->isActive() && $m->hasValidTarget()))->toBeTrue()
+        // The existing card keeps its own method; none is added for it.
+        ->and(PaymentMethod::where('credit_card_id', $this->card->id)->count())->toBe(1)
+        ->and(CreditCard::count())->toBe(1);
+});
+
+test('it adds the VPS and AI subscriptions on the card as monthly baht costs', function () {
+    $this->seed(SampleDataSeeder::class);
+
+    $vps = Subscription::where('name', 'ค่า VPS')->sole();
+    $ai = Subscription::where('name', 'ค่า AI สำหรับคอนเทนต์')->sole();
+
+    expect($vps->estimated_amount)->toBe(180_000)
+        ->and($ai->estimated_amount)->toBe(75_000)
+        ->and($vps->currency)->toBe(Currency::THB)
+        ->and($ai->billing_cycle)->toBe(BillingCycle::Monthly)
+        ->and($vps->credit_card_id)->toBe($this->card->id)
+        ->and($vps->payment_method_id)->toBe($this->card->paymentMethod->id)
+        ->and($vps->notes)->toBe(SampleDataSeeder::MARKER)
+        ->and($vps->charges()->count())->toBe(6);
+});
+
+test('running again adds no accounts, methods or subscriptions, and a missing one is added alone', function () {
+    $this->seed(SampleDataSeeder::class);
+    $first = sampleCounts();
+
+    $this->seed(SampleDataSeeder::class);
+    expect(sampleCounts())->toBe($first);
+
+    // Someone removed one method by hand: only that one comes back.
+    $kept = PaymentMethod::where('name', 'like', 'PromptPay%')->firstOrFail();
+    $accountsBefore = BankAccount::all()->map->getAttributes()->all();
+    PaymentMethod::where('name', 'like', 'เงินสดย่อย%')->delete();
+
+    $this->seed(SampleDataSeeder::class);
+
+    expect(PaymentMethod::count())->toBe($first['methods'])
+        ->and($kept->fresh()->getAttributes())->toBe($kept->getAttributes())
+        ->and(BankAccount::all()->map->getAttributes()->all())->toBe($accountsBefore)
+        ->and(Subscription::count())->toBe($first['subscriptions']);
+});
+
+test('existing accounts and methods are never changed, even when edited or switched off', function () {
+    $account = BankAccount::factory()->create(['name' => 'KBank บัญชีบริษัท', 'last_four' => '1111', 'deactivated_at' => now()]);
+    $method = PaymentMethod::factory()->cash()->create(['name' => 'เงินสดย่อยสำนักงาน (ตัวอย่าง)', 'deactivated_at' => now()]);
+    $before = [$account->fresh()->getAttributes(), $method->fresh()->getAttributes(), $this->card->fresh()->getAttributes(), $this->card->paymentMethod->fresh()->getAttributes()];
+
+    $this->seed(SampleDataSeeder::class);
+
+    expect([$account->fresh()->getAttributes(), $method->fresh()->getAttributes(), $this->card->fresh()->getAttributes(), $this->card->paymentMethod->fresh()->getAttributes()])->toBe($before)
+        ->and(BankAccount::where('name', 'KBank บัญชีบริษัท')->count())->toBe(1)
+        ->and(PaymentMethod::where('name', 'เงินสดย่อยสำนักงาน (ตัวอย่าง)')->count())->toBe(1)
+        ->and(BankAccount::count())->toBe(2);
+});
+
+test('the channels add no amounts: charges exist only for the sample subscriptions, real rows are untouched', function () {
+    $real = Subscription::factory()->create(['name' => 'ของจริง', 'vendor' => 'ผู้ขายจริง']);
+    $charge = SubscriptionCharge::factory()->for($real)->create(['amount' => 99_900]);
+    $rows = $charge->fresh()->getAttributes();
+    $realBefore = SubscriptionCharge::where('subscription_id', $real->id)->sum('amount');
+
+    $this->seed(SampleDataSeeder::class);
+
+    $sampleIds = Subscription::where('notes', SampleDataSeeder::MARKER)->pluck('id');
+
+    expect($charge->fresh()->getAttributes())->toBe($rows)
+        ->and(SubscriptionCharge::where('subscription_id', $real->id)->sum('amount'))->toEqual($realBefore)
+        ->and(SubscriptionCharge::whereNotIn('subscription_id', $sampleIds->push($real->id))->count())->toBe(0);
+});
+
+test('if the seeder fails, no bank account or method is left behind', function () {
+    $attached = 0;
+    ChargeReceipt::created(function () use (&$attached) {
+        if (++$attached === 3) {
+            throw new RuntimeException('simulated failure');
+        }
+    });
+
+    expect(fn () => $this->seed(SampleDataSeeder::class))->toThrow(RuntimeException::class);
+
+    expect(BankAccount::count())->toBe(0)
+        ->and(PaymentMethod::count())->toBe(1);   // only the card's own method from beforeEach
+});
+
+test('the new pages show the sample channels', function () {
+    $this->seed(SampleDataSeeder::class);
+    $this->actingAs($this->owner);
+
+    $this->get(route('bank-accounts.index'))->assertOk()->assertSee('KBank บัญชีบริษัท')->assertSee('SCB บัญชีบริษัท');
+    $this->get(route('payment-methods.index'))->assertOk()->assertSee('PromptPay / QR ผ่านบัญชี SCB (ตัวอย่าง)')->assertSee('เงินสดย่อยสำนักงาน (ตัวอย่าง)');
+});
+
+test('the card sample set is exactly eight automatic card subscriptions', function () {
+    $this->seed(SampleDataSeeder::class);
+
+    $subscriptions = Subscription::with('paymentMethod')->get();
+
+    expect($subscriptions)->toHaveCount(8)
+        ->and($subscriptions->every(fn ($s) => $s->paymentMethod->type === PaymentMethodType::Card && $s->paymentMethod->settlement === SettlementMode::Auto))->toBeTrue()
+        ->and($subscriptions->pluck('name')->all())->toContain('ChatGPT Plus', 'Claude Pro', 'Cloud Server (Droplet)', 'Cloudflare Pro', 'Web Hosting (Business)', 'Canva Pro', 'ค่า VPS', 'ค่า AI สำหรับคอนเทนต์');
+});
+
+test('a database that already has the older samples keeps them and gets only the missing ones', function () {
+    // What the real database looks like today: older samples (some no longer in the catalog) plus a real one.
+    $older = collect([
+        ['ChatGPT Plus', 'OpenAI'], ['Claude Pro', 'Anthropic'], ['Canva Pro', 'Canva'], ['Cloud Server (Droplet)', 'DigitalOcean'],
+        ['Cloudflare Pro', 'Cloudflare'], ['Web Hosting (Business)', 'Hostinger'],
+        ['Zoom Pro', 'Zoom'], ['Google Workspace Business Standard', 'Google'], ['LINE Official Account', 'LINE'],
+        ['Adobe Creative Cloud', 'Adobe'],
+    ])->map(fn ($pair) => Subscription::factory()->create(['name' => $pair[0], 'vendor' => $pair[1], 'notes' => $pair[0] === 'Adobe Creative Cloud' ? 'ของจริง' : SampleDataSeeder::MARKER]));
+    $charges = $older->map(fn ($s) => SubscriptionCharge::factory()->for($s)->create());
+    $before = $older->map(fn ($s) => $s->fresh()->getAttributes())->all();
+    $chargesBefore = $charges->map(fn ($c) => $c->fresh()->getAttributes())->all();
+
+    $this->seed(SampleDataSeeder::class);
+
+    expect(Subscription::count())->toBe(12)                                   // 10 existing + VPS + AI
+        ->and($older->map(fn ($s) => $s->fresh()->getAttributes())->all())->toBe($before)
+        ->and($charges->map(fn ($c) => $c->fresh()->getAttributes())->all())->toBe($chargesBefore)
+        ->and(Subscription::whereIn('name', ['ค่า VPS', 'ค่า AI สำหรับคอนเทนต์'])->count())->toBe(2)
+        ->and(Subscription::where('name', 'Zoom Pro')->count())->toBe(1)
+        ->and(Subscription::where('status', SubscriptionStatus::Cancelled->value)->count())->toBe(0);
+
+    $this->seed(SampleDataSeeder::class);
+
+    expect(Subscription::count())->toBe(12);
 });

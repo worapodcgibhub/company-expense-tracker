@@ -2,17 +2,21 @@
 
 namespace Database\Seeders;
 
+use App\Enums\BankAccountKind;
 use App\Enums\BillingCycle;
 use App\Enums\CardKind;
 use App\Enums\CardNetwork;
 use App\Enums\ChargeOutcome;
 use App\Enums\Currency;
+use App\Enums\PaymentMethodType;
 use App\Enums\ReceiptKind;
 use App\Enums\SubscriptionCategory;
 use App\Enums\SubscriptionStatus;
 use App\Enums\UserRole;
+use App\Models\BankAccount;
 use App\Models\ChargeReceipt;
 use App\Models\CreditCard;
+use App\Models\PaymentMethod;
 use App\Models\Subscription;
 use App\Models\SubscriptionCharge;
 use App\Models\User;
@@ -51,6 +55,12 @@ use Throwable;
  *   changeStatus) with the clock moved back to each moment, so dates,
  *   next charge dates, history and totals are consistent. All dates are
  *   relative to the day it is run.
+ * - Phase 3.1: also adds sample bank accounts (last four digits only) and
+ *   payment methods (transfer, PromptPay/QR, direct debit, petty cash),
+ *   found by name so a second run adds nothing. Sample expenses that need a
+ *   payment method other than the card (colocation, internet, domain,
+ *   freelancer, one-off costs, advances) wait for Phase 3.1e and the general
+ *   expense phases: the pages still assume a card on every subscription.
  * - Accounting periods are NOT closed and nothing is verified (that needs
  *   an Accountant): those remain decisions for real people.
  */
@@ -85,19 +95,12 @@ class SampleDataSeeder extends Seeder
     {
         return [
             ['name' => 'ChatGPT Plus', 'vendor' => 'OpenAI', 'pdf' => 'OpenAI', 'category' => SubscriptionCategory::Software, 'currency' => Currency::USD, 'amount' => 2_000, 'cycle' => BillingCycle::Monthly, 'next_in' => 3, 'revise' => [1 => 'fill_thb']],
-            ['name' => 'Claude Pro', 'vendor' => 'Anthropic', 'pdf' => 'Anthropic', 'category' => SubscriptionCategory::Software, 'currency' => Currency::USD, 'amount' => 2_000, 'cycle' => BillingCycle::Monthly, 'next_in' => 12],
-            ['name' => 'Google Workspace Business Standard', 'vendor' => 'Google', 'pdf' => 'Google Workspace', 'category' => SubscriptionCategory::Communication, 'currency' => Currency::THB, 'amount' => 210_000, 'cycle' => BillingCycle::Monthly, 'next_in' => 6, 'tax_invoice' => true, 'replace' => 3],
-            ['name' => 'Microsoft 365 Business Basic', 'vendor' => 'Microsoft', 'pdf' => 'Microsoft 365', 'category' => SubscriptionCategory::Productivity, 'currency' => Currency::THB, 'amount' => 60_000, 'cycle' => BillingCycle::Monthly, 'next_in' => 20, 'tax_invoice' => true],
+            ['name' => 'Claude Pro', 'vendor' => 'Anthropic', 'pdf' => 'Anthropic', 'category' => SubscriptionCategory::Software, 'currency' => Currency::USD, 'amount' => 2_000, 'cycle' => BillingCycle::Monthly, 'next_in' => 12, 'replace' => 3, 'pause_after' => 3],
             ['name' => 'Canva Pro', 'vendor' => 'Canva', 'pdf' => 'Canva', 'category' => SubscriptionCategory::Design, 'currency' => Currency::THB, 'amount' => 33_900, 'cycle' => BillingCycle::Monthly, 'next_in' => 9, 'skip' => 2],
-            ['name' => 'Adobe Acrobat Pro', 'vendor' => 'Adobe', 'pdf' => 'Adobe Acrobat', 'category' => SubscriptionCategory::Productivity, 'currency' => Currency::USD, 'amount' => 1_999, 'cycle' => BillingCycle::Monthly, 'next_in' => 15],
-            ['name' => 'Figma Professional', 'vendor' => 'Figma', 'pdf' => 'Figma', 'category' => SubscriptionCategory::Design, 'currency' => Currency::USD, 'amount' => 1_500, 'cycle' => BillingCycle::Monthly, 'next_in' => 25],
             ['name' => 'Cloud Server (Droplet)', 'vendor' => 'DigitalOcean', 'pdf' => 'DigitalOcean', 'category' => SubscriptionCategory::CloudHosting, 'currency' => Currency::USD, 'amount' => 2_400, 'cycle' => BillingCycle::Monthly, 'next_in' => 2, 'deltas' => [0, 120, -80, 260, 40, 310], 'revise' => [1 => 'actual_amount']],
             ['name' => 'Cloudflare Pro', 'vendor' => 'Cloudflare', 'pdf' => 'Cloudflare', 'category' => SubscriptionCategory::CloudHosting, 'currency' => Currency::USD, 'amount' => 2_500, 'cycle' => BillingCycle::Monthly, 'next_in' => -2, 'unavailable' => [2 => 'ดาวน์โหลดใบเสร็จย้อนหลังจากระบบผู้ให้บริการไม่ได้']],
-            ['name' => 'LINE Official Account', 'vendor' => 'LINE', 'pdf' => 'LINE', 'category' => SubscriptionCategory::Marketing, 'currency' => Currency::THB, 'amount' => 128_000, 'cycle' => BillingCycle::Monthly, 'next_in' => 18, 'tax_invoice' => true],
-            ['name' => 'Zoom Pro', 'vendor' => 'Zoom', 'pdf' => 'Zoom', 'category' => SubscriptionCategory::Communication, 'currency' => Currency::USD, 'amount' => 1_599, 'cycle' => BillingCycle::Monthly, 'next_in' => 8, 'pause_after' => 3, 'unavailable' => [4 => 'ผู้ให้บริการส่งเพียงอีเมลแจ้งชำระเงิน ไม่ออกใบเสร็จ']],
-            ['name' => 'GitHub Team', 'vendor' => 'GitHub', 'pdf' => 'GitHub', 'category' => SubscriptionCategory::Software, 'currency' => Currency::USD, 'amount' => 800, 'cycle' => BillingCycle::Monthly, 'next_in' => 27],
-            ['name' => 'อินเทอร์เน็ตสำนักงาน (Fiber 1 Gbps)', 'vendor' => 'AIS Fibre', 'pdf' => 'AIS Fibre', 'category' => SubscriptionCategory::Communication, 'currency' => Currency::THB, 'amount' => 79_900, 'cycle' => BillingCycle::Monthly, 'next_in' => 10, 'tax_invoice' => true],
-            ['name' => 'โดเมนบริษัท (.co.th)', 'vendor' => 'THNIC', 'pdf' => 'THNIC Domain', 'category' => SubscriptionCategory::CloudHosting, 'currency' => Currency::THB, 'amount' => 80_000, 'cycle' => BillingCycle::Yearly, 'next_in' => 5, 'history' => 0, 'tax_invoice' => true],
+            ['name' => 'ค่า VPS', 'vendor' => 'ผู้ให้บริการ VPS (ตัวอย่าง)', 'pdf' => 'VPS Provider', 'category' => SubscriptionCategory::CloudHosting, 'currency' => Currency::THB, 'amount' => 180_000, 'cycle' => BillingCycle::Monthly, 'next_in' => 6, 'tax_invoice' => true],
+            ['name' => 'ค่า AI สำหรับคอนเทนต์', 'vendor' => 'ผู้ให้บริการ AI (ตัวอย่าง)', 'pdf' => 'AI Content Tool', 'category' => SubscriptionCategory::Software, 'currency' => Currency::THB, 'amount' => 75_000, 'cycle' => BillingCycle::Monthly, 'next_in' => 8, 'unavailable' => [4 => 'ผู้ให้บริการส่งเพียงอีเมลแจ้งชำระเงิน ไม่ออกใบเสร็จ']],
             ['name' => 'Web Hosting (Business)', 'vendor' => 'Hostinger', 'pdf' => 'Hostinger', 'category' => SubscriptionCategory::CloudHosting, 'currency' => Currency::USD, 'amount' => 4_788, 'cycle' => BillingCycle::Yearly, 'next_in' => 200],
         ];
     }
@@ -112,18 +115,28 @@ class SampleDataSeeder extends Seeder
 
         $todo = array_values(array_filter(self::catalog(), fn (array $item) => ! $this->alreadyExists($item['name'], $item['vendor'])));
 
-        if ($todo === []) {
+        $channelsMissing = $this->channelsMissing();
+
+        if ($todo === [] && ! $channelsMissing) {
             $this->say('ข้อมูลตัวอย่างมีครบแล้ว ไม่ได้เพิ่มอะไร');
 
             return;
         }
 
-        try {
-            DB::transaction(function () use ($todo, $owner) {
-                $card = $this->cardToUse();
+        $added = ['accounts' => 0, 'methods' => 0];
 
-                foreach ($todo as $item) {
-                    $this->seedSubscription($item, $owner, $card);
+        try {
+            DB::transaction(function () use ($todo, $owner, $channelsMissing, &$added) {
+                if ($channelsMissing) {
+                    $added = $this->seedPaymentChannels($owner);
+                }
+
+                if ($todo !== []) {
+                    $card = $this->cardToUse();
+
+                    foreach ($todo as $item) {
+                        $this->seedSubscription($item, $owner, $card);
+                    }
                 }
             });
         } catch (Throwable $e) {
@@ -136,7 +149,96 @@ class SampleDataSeeder extends Seeder
             $this->resetClock();
         }
 
+        $this->say('เพิ่มบัญชีธนาคารตัวอย่าง '.$added['accounts'].' บัญชี ช่องทางชำระเงิน '.$added['methods'].' ช่องทาง');
         $this->say('เพิ่ม Subscription ตัวอย่าง '.count($todo).' รายการ (ข้าม '.(count(self::catalog()) - count($todo)).' รายการที่มีอยู่แล้ว)');
+    }
+
+    /**
+     * Sample bank accounts: name, bank, last four digits only.
+     *
+     * @return list<array{name: string, bank: string, last_four: string}>
+     */
+    public static function bankAccounts(): array
+    {
+        return [
+            ['name' => 'KBank บัญชีบริษัท', 'bank' => 'ธนาคารกสิกรไทย (KBank)', 'last_four' => '5678'],
+            ['name' => 'SCB บัญชีบริษัท', 'bank' => 'ธนาคารไทยพาณิชย์ (SCB)', 'last_four' => '9012'],
+        ];
+    }
+
+    /**
+     * Sample payment methods: name, type, account name (null = none).
+     * PromptPay / QR is a bank transfer type linked to the SCB account (there
+     * is no separate type); the name says so because methods have no notes.
+     * An advance-payment method is not here: it needs its own type (later).
+     *
+     * @return list<array{name: string, type: PaymentMethodType, account: ?string}>
+     */
+    public static function paymentMethods(): array
+    {
+        return [
+            ['name' => 'โอนเงินผ่านธนาคาร KBank (ตัวอย่าง)', 'type' => PaymentMethodType::BankTransfer, 'account' => 'KBank บัญชีบริษัท'],
+            ['name' => 'PromptPay / QR ผ่านบัญชี SCB (ตัวอย่าง)', 'type' => PaymentMethodType::BankTransfer, 'account' => 'SCB บัญชีบริษัท'],
+            ['name' => 'หักบัญชีอัตโนมัติ KBank (ตัวอย่าง)', 'type' => PaymentMethodType::DirectDebit, 'account' => 'KBank บัญชีบริษัท'],
+            ['name' => 'เงินสดย่อยสำนักงาน (ตัวอย่าง)', 'type' => PaymentMethodType::Cash, 'account' => null],
+        ];
+    }
+
+    private function channelsMissing(): bool
+    {
+        return count(self::bankAccounts()) > BankAccount::query()->whereIn('name', array_column(self::bankAccounts(), 'name'))->count()
+            || count(self::paymentMethods()) > PaymentMethod::query()->whereIn('name', array_column(self::paymentMethods(), 'name'))->count();
+    }
+
+    /**
+     * Adds only what is missing, found by name (any status); never updates.
+     *
+     * @return array{accounts: int, methods: int}
+     */
+    private function seedPaymentChannels(User $owner): array
+    {
+        $added = ['accounts' => 0, 'methods' => 0];
+        $accounts = [];
+
+        foreach (self::bankAccounts() as $item) {
+            $account = BankAccount::query()->where('name', $item['name'])->first();
+
+            if ($account === null) {
+                $account = new BankAccount;
+                $account->forceFill([
+                    'name' => $item['name'],
+                    'bank' => $item['bank'],
+                    'account_name' => 'บริษัท ตัวอย่าง จำกัด',
+                    'last_four' => $item['last_four'],
+                    'kind' => BankAccountKind::Current,
+                    'notes' => self::MARKER,
+                    'created_by' => $owner->id,
+                    'updated_by' => $owner->id,
+                ])->save();
+                $added['accounts']++;
+            }
+
+            $accounts[$item['name']] = $account;
+        }
+
+        foreach (self::paymentMethods() as $item) {
+            if (PaymentMethod::query()->where('name', $item['name'])->exists()) {
+                continue;
+            }
+
+            $method = new PaymentMethod;
+            $method->forceFill([
+                'name' => $item['name'],
+                'type' => $item['type'],
+                'settlement' => $item['type']->defaultSettlement(),
+                'bank_account_id' => $item['account'] === null ? null : $accounts[$item['account']]->id,
+                'created_by' => $owner->id,
+                'updated_by' => $owner->id,
+            ])->save();
+            $added['methods']++;
+        }
+
+        return $added;
     }
 
     /**
@@ -239,7 +341,7 @@ class SampleDataSeeder extends Seeder
 
         if ($pauseAfter !== null && isset($dues[$pauseAfter - 1])) {
             $this->at($dues[$pauseAfter - 1]->addDays(5)->setTime(11, 0));
-            $subscription->refresh()->changeStatus(SubscriptionStatus::Paused, $owner, 'ทีมย้ายไปใช้ Google Meet ชั่วคราว');
+            $subscription->refresh()->changeStatus(SubscriptionStatus::Paused, $owner, 'ระงับชั่วคราวระหว่างทดลองใช้เครื่องมืออื่น');
         }
     }
 

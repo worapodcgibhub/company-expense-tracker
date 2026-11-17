@@ -150,5 +150,7 @@ test('the sample data seeder still works and links every row to a payment method
         ->and(Subscription::whereNull('payment_method_id')->count())->toBe(0)
         ->and(SubscriptionCharge::whereNull('payment_method_id')->count())->toBe(0)
         ->and(CreditCard::count())->toBe(1)
-        ->and(PaymentMethod::count())->toBe(1);
+        // One method for the card, plus the 4 sample channels (Phase 3.1 seeder).
+        ->and(PaymentMethod::whereNotNull('credit_card_id')->count())->toBe(1)
+        ->and(PaymentMethod::count())->toBe(5);
 });
