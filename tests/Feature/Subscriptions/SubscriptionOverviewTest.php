@@ -175,7 +175,7 @@ test('the list filters by status and puts the soonest charge first', function ()
     expect($component->instance()->subscriptions()->pluck('name')->all())->toBe(['Zoom ยกเลิก']);
 });
 
-test('the list can be searched and filtered by category, cycle and card', function () {
+test('the list can be searched and filtered by category, cycle and payment method', function () {
     $card = CreditCard::factory()->create();
     Subscription::factory()->create(['name' => 'Canva Pro', 'vendor' => 'Canva Pty', 'category' => 'design', 'credit_card_id' => $card->id]);
     Subscription::factory()->create(['name' => 'AWS', 'vendor' => 'Amazon', 'category' => 'cloud_hosting', 'billing_cycle' => BillingCycle::Yearly]);
@@ -186,18 +186,18 @@ test('the list can be searched and filtered by category, cycle and card', functi
     expect($names($page()->set('search', 'amazon')))->toBe(['AWS'])
         ->and($names($page()->set('category', 'design')))->toBe(['Canva Pro'])
         ->and($names($page()->set('cycle', 'yearly')))->toBe(['AWS'])
-        ->and($names($page()->set('card', (string) $card->id)))->toBe(['Canva Pro']);
+        ->and($names($page()->set('method', (string) $card->paymentMethod->id)))->toBe(['Canva Pro']);
 });
 
-test('the card filter is ignored for staff', function () {
+test('the payment method filter is ignored for staff', function () {
     $staff = User::factory()->create();
     $card = CreditCard::factory()->create();
     Subscription::factory()->create(['name' => 'ของฉัน', 'responsible_user_id' => $staff->id]);
 
-    $component = Livewire\Livewire::actingAs($staff)->test('pages::subscriptions.index')->set('card', (string) $card->id);
+    $component = Livewire\Livewire::actingAs($staff)->test('pages::subscriptions.index')->set('method', (string) $card->paymentMethod->id);
 
     expect($component->instance()->subscriptions()->pluck('name')->all())->toBe(['ของฉัน'])
-        ->and($component->instance()->cards())->toHaveCount(0);
+        ->and($component->instance()->methods())->toHaveCount(0);
 });
 
 test('the card page shows how many open subscriptions use each card', function () {

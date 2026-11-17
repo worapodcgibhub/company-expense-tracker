@@ -3,7 +3,8 @@
 use App\Enums\BillingCycle;
 use App\Enums\SubscriptionCategory;
 use App\Enums\SubscriptionStatus;
-use App\Models\CreditCard;
+use App\Enums\SettlementMode;
+use App\Models\PaymentMethod;
 use App\Models\Subscription;
 use App\Support\SubscriptionOverview;
 use App\Support\ThaiFormat;
@@ -34,7 +35,10 @@ new #[Title('Subscription')] class extends Component {
     public string $cycle = '';
 
     #[Url(except: '')]
-    public string $card = '';
+    public string $method = '';
+
+    #[Url(except: '')]
+    public string $settlement = '';
 
     public function mount(): void
     {
@@ -56,7 +60,8 @@ new #[Title('Subscription')] class extends Component {
             ->when($status !== null, fn (Builder $query) => $query->where('status', $status?->value))
             ->when(SubscriptionCategory::tryFrom($this->category), fn (Builder $query, SubscriptionCategory $category) => $query->where('category', $category->value))
             ->when(BillingCycle::tryFrom($this->cycle), fn (Builder $query, BillingCycle $cycle) => $query->where('billing_cycle', $cycle->value))
-            ->when($this->canFilterByCard() && ctype_digit($this->card), fn (Builder $query) => $query->where('credit_card_id', (int) $this->card))
+            ->when($this->canFilterByMethod() && ctype_digit($this->method), fn (Builder $query) => $query->where('payment_method_id', (int) $this->method))
+            ->when(SettlementMode::tryFrom($this->settlement), fn (Builder $query, SettlementMode $mode) => $query->whereHas('paymentMethod', fn (Builder $method) => $method->where('settlement', $mode->value)))
             ->when($search !== '', function (Builder $query) use ($search) {
                 $like = '%'.$search.'%';
 
@@ -98,12 +103,14 @@ new #[Title('Subscription')] class extends Component {
     }
 
     /**
-     * @return Collection<int, CreditCard>
+     * @return Collection<int, PaymentMethod>
      */
     #[Computed]
-    public function cards(): Collection
+    public function methods(): Collection
     {
-        return $this->canFilterByCard() ? CreditCard::query()->orderByRaw('deactivated_at IS NOT NULL')->orderBy('name')->get() : new Collection;
+        return $this->canFilterByMethod()
+            ? PaymentMethod::query()->with(['creditCard', 'bankAccount'])->orderByRaw('deactivated_at IS NOT NULL')->orderBy('name')->get()
+            : new Collection;
     }
 
     public function statusFilter(): string
@@ -119,16 +126,16 @@ new #[Title('Subscription')] class extends Component {
 
     public function resetFilters(): void
     {
-        $this->reset(['search', 'category', 'cycle', 'card']);
+        $this->reset(['search', 'category', 'cycle', 'method', 'settlement']);
         unset($this->subscriptions);
     }
 
     /**
-     * Staff must not see the company's whole card list.
+     * Staff must not see the company's payment methods.
      */
-    private function canFilterByCard(): bool
+    private function canFilterByMethod(): bool
     {
-        return auth()->user()->can('viewAny', CreditCard::class);
+        return auth()->user()->can('viewAny', PaymentMethod::class);
     }
 }; ?>
 
@@ -140,7 +147,7 @@ new #[Title('Subscription')] class extends Component {
     $currentFilter = $this->statusFilter();
     $overview = $this->overview;
     $monthly = $overview->monthlyEstimateByCurrency();
-    $hasExtraFilters = $search !== '' || $category !== '' || $cycle !== '' || $card !== '';
+    $hasExtraFilters = $search !== '' || $category !== '' || $cycle !== '' || $method !== '' || $settlement !== '';
 @endphp
 
 <div class="mx-auto flex w-full max-w-6xl flex-col gap-6">
@@ -149,7 +156,7 @@ new #[Title('Subscription')] class extends Component {
         <div class="min-w-0">
             <h1 class="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">{{ $seesAll ? 'Subscription' : 'Subscription ของฉัน' }}</h1>
             <p class="mt-1 text-sm text-slate-500">
-                {{ $seesAll ? 'บริการที่บริษัทจ่ายเป็นรอบผ่านบัตร พร้อมวันที่คาดว่าจะตัดบัตรครั้งถัดไป' : 'บริการที่คุณเป็นผู้รับผิดชอบ' }}
+                {{ $seesAll ? 'บริการที่บริษัทจ่ายเป็นรอบ ผ่านบัตร โอนธนาคาร PromptPay/QR หรือหักบัญชี พร้อมกำหนดชำระครั้งถัดไป' : 'บริการที่คุณเป็นผู้รับผิดชอบ' }}
             </p>
         </div>
 
@@ -167,11 +174,11 @@ new #[Title('Subscription')] class extends Component {
             <p class="mt-1 text-2xl font-bold text-slate-900">{{ number_format($overview->activeCount()) }} <span class="text-sm font-normal text-slate-500">บริการ</span></p>
         </x-ui.card>
         <x-ui.card class="!p-4">
-            <p class="text-sm text-slate-500">จะตัดบัตรใน 7 วัน</p>
+            <p class="text-sm text-slate-500">ใกล้ถึงกำหนดชำระ (7 วัน)</p>
             <p class="mt-1 text-2xl font-bold text-amber-600">{{ number_format($overview->upcoming(7)->count()) }} <span class="text-sm font-normal text-slate-500">รายการ</span></p>
         </x-ui.card>
         <x-ui.card class="!p-4">
-            <p class="text-sm text-slate-500">เลยกำหนด ยังไม่อัปเดต</p>
+            <p class="text-sm text-slate-500">เลยกำหนด ยังไม่ยืนยันยอด</p>
             <p @class(['mt-1 text-2xl font-bold', 'text-red-600' => $overview->overdue()->isNotEmpty(), 'text-slate-900' => $overview->overdue()->isEmpty()])>
                 {{ number_format($overview->overdue()->count()) }} <span class="text-sm font-normal text-slate-500">รายการ</span>
             </p>
@@ -213,7 +220,7 @@ new #[Title('Subscription')] class extends Component {
             </div>
         </div>
 
-        <div @class(['grid gap-3', 'sm:grid-cols-3' => $seesAll, 'sm:grid-cols-2' => ! $seesAll])>
+        <div @class(['grid gap-3', 'sm:grid-cols-2 lg:grid-cols-4' => $seesAll, 'sm:grid-cols-2' => ! $seesAll])>
             <flux:select wire:model.live="category" aria-label="หมวดหมู่">
                 <flux:select.option value="">ทุกหมวดหมู่</flux:select.option>
                 @foreach (SubscriptionCategory::cases() as $case)
@@ -229,10 +236,17 @@ new #[Title('Subscription')] class extends Component {
             </flux:select>
 
             @if ($seesAll)
-                <flux:select wire:model.live="card" aria-label="บัตรที่ใช้ชำระ">
-                    <flux:select.option value="">ทุกบัตร</flux:select.option>
-                    @foreach ($this->cards as $option)
-                        <flux:select.option value="{{ $option->id }}">{{ $option->name }} ({{ $option->maskedNumber() }}){{ $option->isActive() ? '' : ' · ปิดใช้งาน' }}</flux:select.option>
+                <flux:select wire:model.live="method" aria-label="ช่องทางชำระเงิน">
+                    <flux:select.option value="">ทุกช่องทางชำระเงิน</flux:select.option>
+                    @foreach ($this->methods as $option)
+                        <flux:select.option value="{{ $option->id }}">{{ $option->name }}{{ $option->isActive() ? '' : ' · ปิดใช้งาน' }}</flux:select.option>
+                    @endforeach
+                </flux:select>
+
+                <flux:select wire:model.live="settlement" aria-label="วิธียืนยันการชำระ">
+                    <flux:select.option value="">Auto และ Manual</flux:select.option>
+                    @foreach (SettlementMode::cases() as $mode)
+                        <flux:select.option value="{{ $mode->value }}">{{ $mode === SettlementMode::Auto ? 'Auto · ตัดเงินอัตโนมัติ' : 'Manual · ต้องชำระเอง' }}</flux:select.option>
                     @endforeach
                 </flux:select>
             @endif
@@ -244,7 +258,7 @@ new #[Title('Subscription')] class extends Component {
         <x-ui.empty-state
             icon="calendar-days"
             :title="$seesAll ? 'ยังไม่มี Subscription ในระบบ' : 'ยังไม่มี Subscription ที่คุณรับผิดชอบ'"
-            description="เพิ่มบริการที่จ่ายเป็นรอบ เช่น Adobe, Microsoft 365 หรือค่า Hosting เพื่อให้รู้ล่วงหน้าว่าบัตรจะถูกตัดเงินเมื่อไร"
+            description="เพิ่มบริการที่จ่ายเป็นรอบ เช่น Adobe, Microsoft 365 หรือค่า Hosting เพื่อให้รู้ล่วงหน้าว่าต้องชำระหรือจะถูกตัดเงินเมื่อไร"
         >
             @if ($canCreate)
                 <flux:button variant="primary" icon="plus" :href="route('subscriptions.create')" wire:navigate>เพิ่ม Subscription แรก</flux:button>
@@ -272,10 +286,20 @@ new #[Title('Subscription')] class extends Component {
                                 </p>
                                 <p class="truncate text-sm text-slate-500">{{ $subscription->vendor }} · {{ $subscription->category->label() }}</p>
                                 <p class="mt-0.5 text-sm text-slate-600">
-                                    @if ($subscription->creditCard)
-                                        <span class="font-mono tracking-wider">{{ $subscription->creditCard->maskedNumber() }}</span>
+                                    @php $channel = $subscription->paymentMethod; @endphp
+                                    @if ($channel)
+                                        <span data-test="channel">{{ $channel->name }}</span>
+                                        @php $target = $channel->creditCard?->maskedNumber() ?? $channel->bankAccount?->maskedNumber(); @endphp
+                                        @if ($target)
+                                            <span class="font-mono tracking-wider">{{ $target }}</span>
+                                        @endif
+                                        <span @class([
+                                            'ms-1 rounded-full px-2 py-0.5 text-xs font-medium',
+                                            'bg-indigo-50 text-indigo-700' => $channel->isAuto(),
+                                            'bg-amber-50 text-amber-800' => ! $channel->isAuto(),
+                                        ]) data-test="settlement-badge">{{ $channel->isAuto() ? 'Auto' : 'Manual' }}</span>
                                     @else
-                                        <span>{{ $subscription->paymentMethod?->name ?? '–' }}</span>
+                                        <span>–</span>
                                     @endif
                                     <span class="text-slate-400">·</span>
                                     ผู้รับผิดชอบ {{ $subscription->responsible->name }}
@@ -285,7 +309,7 @@ new #[Title('Subscription')] class extends Component {
                             <div class="flex flex-col gap-2 sm:items-end">
                                 <p class="font-semibold text-slate-900">{{ $subscription->amountLabel() }} <span class="text-xs font-normal text-slate-500">(ประมาณการ)</span></p>
                                 <p class="text-sm text-slate-600">
-                                    ตัดบัตรถัดไป {{ ThaiFormat::date($subscription->next_charge_date) }}
+                                    {{ ($subscription->paymentMethod?->isAuto() ?? true) ? 'ตัดเงินถัดไป' : 'กำหนดชำระถัดไป' }} {{ ThaiFormat::date($subscription->next_charge_date) }}
                                     @if ($subscription->isActive())
                                         <span @class(['font-medium', 'text-red-600' => $overdue, 'text-amber-600' => $soon, 'text-slate-500' => ! $overdue && ! $soon])>· {{ $subscription->dueLabel() }}</span>
                                     @endif
