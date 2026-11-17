@@ -5,7 +5,10 @@ namespace App\Models;
 use App\Enums\ChargeOutcome;
 use App\Enums\ChargeRevisionAction;
 use App\Enums\Currency;
+use App\Enums\ReceiptKind;
+use App\Enums\ReceiptStatus;
 use App\Exceptions\ChargeConflictException;
+use App\Support\ReceiptStorage;
 use App\Support\ThaiFormat;
 use Carbon\CarbonImmutable;
 use Database\Factories\SubscriptionChargeFactory;
@@ -16,7 +19,10 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use LogicException;
+use Throwable;
 
 /**
  * What actually happened in one billing cycle of a subscription.
@@ -33,6 +39,11 @@ use Illuminate\Support\Facades\DB;
  * - `entered_after_close` is set (and stays set) when the charge was
  *   recorded or changed while its month was a closed accounting period.
  *   The closed period itself is never changed.
+ * - Documents (Phase 2.5): a charge can be recorded without any receipt
+ *   and documents attached later (attachReceipt). receiptStatus() tells
+ *   "waiting" apart from "no receipt available" (receipt_unavailable_*,
+ *   always with a reason). Removing or replacing a document never touches
+ *   the charge's amounts.
  *
  * @property int $id
  * @property int $subscription_id
@@ -49,6 +60,9 @@ use Illuminate\Support\Facades\DB;
  * @property int|null $verified_by
  * @property int|null $recorded_by
  * @property int|null $updated_by
+ * @property CarbonImmutable|null $receipt_unavailable_at
+ * @property int|null $receipt_unavailable_by
+ * @property string|null $receipt_unavailable_reason
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
  * @property-read Subscription $subscription
@@ -56,6 +70,7 @@ use Illuminate\Support\Facades\DB;
  * @property-read User|null $recorder
  * @property-read User|null $updater
  * @property-read User|null $verifier
+ * @property-read User|null $receiptUnavailableMarker
  */
 class SubscriptionCharge extends Model
 {
@@ -107,12 +122,157 @@ class SubscriptionCharge extends Model
             'amount_thb' => 'integer',
             'entered_after_close' => 'boolean',
             'verified_at' => 'datetime',
+            'receipt_unavailable_at' => 'datetime',
         ];
     }
 
     public function isCharged(): bool
     {
         return $this->outcome === ChargeOutcome::Charged;
+    }
+
+    /**
+     * Documents not removed. Uses `current_receipts_count` when the query
+     * loaded it (withCurrentReceiptCount), so lists do not query per row.
+     */
+    public function currentReceiptCount(): int
+    {
+        if (array_key_exists('current_receipts_count', $this->attributes)) {
+            return (int) $this->attributes['current_receipts_count'];
+        }
+
+        return $this->receipts()->current()->count();
+    }
+
+    public function receiptStatus(): ReceiptStatus
+    {
+        return match (true) {
+            ! $this->isCharged() => ReceiptStatus::NotNeeded,
+            $this->currentReceiptCount() > 0 => ReceiptStatus::Attached,
+            $this->receipt_unavailable_at !== null => ReceiptStatus::Unavailable,
+            default => ReceiptStatus::Waiting,
+        };
+    }
+
+    /**
+     * Stores the file on the private disk and attaches it. With $replaces,
+     * the old document is removed (kept, with $reason) in the same step.
+     * A "no receipt available" note is cleared, since there is one now.
+     * The charge's amounts are never touched.
+     *
+     * @throws ChargeConflictException
+     */
+    public function attachReceipt(
+        UploadedFile $file,
+        ReceiptKind $kind,
+        ?string $documentNumber,
+        ?DateTimeInterface $documentDate,
+        User $by,
+        ?ChargeReceipt $replaces = null,
+        ?string $reason = null,
+    ): ChargeReceipt {
+        $reason = $reason === null || trim($reason) === '' ? null : trim($reason);
+
+        if (! $this->isCharged()) {
+            throw new ChargeConflictException('รอบนี้ไม่ถูกตัดเงิน จึงไม่ต้องแนบเอกสาร');
+        }
+
+        if ($replaces !== null && ($replaces->subscription_charge_id !== $this->id || $replaces->isRemoved())) {
+            throw new ChargeConflictException('เอกสารที่จะเปลี่ยนถูกนำออกไปแล้ว หรือไม่ใช่ของรายการนี้ กรุณาโหลดหน้าใหม่');
+        }
+
+        if ($replaces !== null && $reason === null) {
+            throw new LogicException('A reason is required to replace a document.');
+        }
+
+        if ($replaces === null && $this->receipts()->current()->count() >= ReceiptStorage::MAX_PER_CHARGE) {
+            throw new ChargeConflictException('แนบเอกสารได้สูงสุด '.ReceiptStorage::MAX_PER_CHARGE.' ไฟล์ต่อรายการ ถ้าต้องการเปลี่ยน ให้ใช้ "เปลี่ยนไฟล์"');
+        }
+
+        $stored = ReceiptStorage::store($file);
+
+        try {
+            return DB::transaction(function () use ($stored, $kind, $documentNumber, $documentDate, $by, $replaces, $reason) {
+                $receipt = new ChargeReceipt;
+                $receipt->forceFill([
+                    ...$stored,
+                    'subscription_charge_id' => $this->id,
+                    'kind' => $kind,
+                    'document_number' => $documentNumber === null || trim($documentNumber) === '' ? null : trim($documentNumber),
+                    'document_date' => $documentDate !== null ? CarbonImmutable::instance($documentDate)->startOfDay() : null,
+                    'replaces_id' => $replaces?->id,
+                    'uploaded_by' => $by->id,
+                ])->save();
+
+                $diff = $receipt->summary();
+
+                if ($replaces !== null) {
+                    $replaces->markRemoved($by, (string) $reason);
+                    $diff['replaced'] = $replaces->summary();
+                }
+
+                if ($this->receipt_unavailable_at !== null) {
+                    $this->forceFill(['receipt_unavailable_at' => null, 'receipt_unavailable_by' => null, 'receipt_unavailable_reason' => null])->save();
+                    $diff['cleared_unavailable'] = true;
+                }
+
+                $this->writeRevision($replaces !== null ? ChargeRevisionAction::ReceiptReplaced : ChargeRevisionAction::ReceiptAdded, $by, $diff, $reason, false);
+
+                return $receipt;
+            });
+        } catch (Throwable $e) {
+            // The row was not saved: do not leave the new file behind.
+            ReceiptStorage::discardUnsaved($stored['path']);
+
+            throw $e;
+        }
+    }
+
+    /**
+     * "No receipt available" (always with a reason). Only while the charge
+     * has no current document.
+     *
+     * @throws ChargeConflictException
+     */
+    public function markReceiptUnavailable(User $by, string $reason): void
+    {
+        $reason = trim($reason);
+
+        if ($reason === '') {
+            throw new LogicException('A reason is required.');
+        }
+
+        if ($this->receiptStatus() !== ReceiptStatus::Waiting) {
+            throw new ChargeConflictException('รายการนี้มีเอกสารแล้ว หรือระบุว่าไม่มีใบเสร็จไปแล้ว');
+        }
+
+        DB::transaction(function () use ($by, $reason) {
+            $this->forceFill([
+                'receipt_unavailable_at' => now(),
+                'receipt_unavailable_by' => $by->id,
+                'receipt_unavailable_reason' => $reason,
+            ])->save();
+
+            $this->writeRevision(ChargeRevisionAction::ReceiptUnavailable, $by, null, $reason, false);
+        });
+    }
+
+    /**
+     * Back to "waiting for receipt".
+     */
+    public function clearReceiptUnavailable(User $by, ?string $reason = null): void
+    {
+        if ($this->receipt_unavailable_at === null) {
+            return;
+        }
+
+        DB::transaction(function () use ($by, $reason) {
+            $previous = $this->receipt_unavailable_reason;
+
+            $this->forceFill(['receipt_unavailable_at' => null, 'receipt_unavailable_by' => null, 'receipt_unavailable_reason' => null])->save();
+
+            $this->writeRevision(ChargeRevisionAction::ReceiptUnavailableCleared, $by, ['previous_reason' => $previous], $reason, false);
+        });
     }
 
     public function isVerified(): bool
@@ -367,6 +527,53 @@ class SubscriptionCharge extends Model
     public function revisions(): HasMany
     {
         return $this->hasMany(SubscriptionChargeRevision::class);
+    }
+
+    /**
+     * Every document ever attached, removed ones included.
+     *
+     * @return HasMany<ChargeReceipt, $this>
+     */
+    public function receipts(): HasMany
+    {
+        return $this->hasMany(ChargeReceipt::class);
+    }
+
+    /**
+     * @return BelongsTo<User, $this>
+     */
+    public function receiptUnavailableMarker(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'receipt_unavailable_by');
+    }
+
+    /**
+     * Loads `current_receipts_count` (documents not removed) for lists.
+     *
+     * @param  Builder<SubscriptionCharge>  $query
+     */
+    #[Scope]
+    protected function withCurrentReceiptCount(Builder $query): void
+    {
+        $query->withCount(['receipts as current_receipts_count' => fn (Builder $q) => $q->whereNull('removed_at')]);
+    }
+
+    /**
+     * Charges whose document status is $status (same rules as receiptStatus()).
+     *
+     * @param  Builder<SubscriptionCharge>  $query
+     */
+    #[Scope]
+    protected function receiptStatusIs(Builder $query, ReceiptStatus $status): void
+    {
+        $hasCurrent = fn (Builder $q) => $q->whereNull('removed_at');
+
+        match ($status) {
+            ReceiptStatus::NotNeeded => $query->where('outcome', '!=', ChargeOutcome::Charged->value),
+            ReceiptStatus::Attached => $query->where('outcome', ChargeOutcome::Charged->value)->whereHas('receipts', $hasCurrent),
+            ReceiptStatus::Unavailable => $query->where('outcome', ChargeOutcome::Charged->value)->whereDoesntHave('receipts', $hasCurrent)->whereNotNull('receipt_unavailable_at'),
+            ReceiptStatus::Waiting => $query->where('outcome', ChargeOutcome::Charged->value)->whereDoesntHave('receipts', $hasCurrent)->whereNull('receipt_unavailable_at'),
+        };
     }
 
     /**

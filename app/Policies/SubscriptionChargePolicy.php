@@ -12,7 +12,9 @@ use App\Models\User;
  * - Owner: record, correct (with history) and view every charge.
  * - Accountant: view every charge; verify / take back verification.
  * - Staff: view only charges of subscriptions they are responsible for.
- *   No recording or changes.
+ *   No recording or changes, except attaching documents (Phase 2.5).
+ * - Documents: Owner, Accountant and the responsible person attach;
+ *   Owner and Accountant change, replace, remove, or record "no receipt".
  *
  * Every ability also requires the acting account itself to be active.
  * Listings and totals must also use SubscriptionCharge::visibleTo().
@@ -52,6 +54,38 @@ class SubscriptionChargePolicy
     public function unverify(User $actor, SubscriptionCharge $charge): bool
     {
         return $actor->isActive() && $actor->isAccountant() && $charge->isVerified();
+    }
+
+    /**
+     * Attach a document: Owner, Accountant, or the person responsible for
+     * the subscription. Only charged cycles need documents.
+     */
+    public function uploadReceipt(User $actor, SubscriptionCharge $charge): bool
+    {
+        return $actor->isActive()
+            && $charge->isCharged()
+            && ($actor->isOwner() || $actor->isAccountant() || $charge->subscription->responsible_user_id === $actor->id);
+    }
+
+    /**
+     * Change details of, replace or remove documents: Owner and Accountant.
+     */
+    public function manageReceipts(User $actor, SubscriptionCharge $charge): bool
+    {
+        return $this->keepsBooks($actor);
+    }
+
+    /**
+     * Record "no receipt available" (with a reason), or take it back.
+     */
+    public function markReceiptUnavailable(User $actor, SubscriptionCharge $charge): bool
+    {
+        return $this->keepsBooks($actor) && $charge->isCharged();
+    }
+
+    private function keepsBooks(User $actor): bool
+    {
+        return $actor->isActive() && ($actor->isOwner() || $actor->isAccountant());
     }
 
     private function manages(User $actor): bool

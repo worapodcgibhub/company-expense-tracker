@@ -12,7 +12,8 @@
      *   (THB amount, or the USD charge's amount_thb). USD is never added to
      *   baht; USD charges still waiting for their baht amount are listed
      *   apart. Closed months on the chart show their closing figure.
-     * - Receipts arrive in Phase 2.5: "missing receipt" stays zero until then.
+     * - Receipts (Phase 2.5): "missing receipt" counts charged cycles still
+     *   WAITING for a document; "no receipt available" ones are not counted.
      */
     $subscriptions = new \App\Support\SubscriptionOverview($user, $today);
     $charges = new \App\Support\ChargeOverview($user, $today);
@@ -25,7 +26,7 @@
         'month_missing_thb_usd' => $thisMonth['missing_thb_usd'],
         'recorded_count' => $thisMonth['charge_count'],
         'upcoming_7d_count' => $subscriptions->upcoming(7)->count(),
-        'missing_receipt_count' => 0,
+        'missing_receipt_count' => $charges->waitingForReceiptCount(),
     ];
     $upcomingCharges = $subscriptions->upcoming(30);
     $actionItems = $subscriptions->overdue()
@@ -108,13 +109,16 @@
                 icon="calendar-days"
                 tone="amber"
             />
-            <x-ui.stat-card
-                :title="__('ขาดใบเสร็จ')"
-                :value="number_format($summary['missing_receipt_count']).' '.__('รายการ')"
-                :hint="$summary['missing_receipt_count'] > 0 ? __('ต้องติดตามใบเสร็จ') : __('ไม่มีรายการค้าง')"
-                icon="document-magnifying-glass"
-                :tone="$summary['missing_receipt_count'] > 0 ? 'red' : 'emerald'"
-            />
+            <a href="{{ route('charges.index', ['month' => 'all', 'receipt' => 'waiting']) }}" wire:navigate class="block" data-test="missing-receipt-card">
+                <x-ui.stat-card
+                    :title="__('ขาดใบเสร็จ')"
+                    :value="number_format($summary['missing_receipt_count']).' '.__('รายการ')"
+                    :hint="$summary['missing_receipt_count'] > 0 ? __('รอใบเสร็จ ต้องติดตาม (ไม่นับรายการที่ระบุว่าไม่มีใบเสร็จ)') : __('ไม่มีรายการค้าง')"
+                    icon="document-magnifying-glass"
+                    :tone="$summary['missing_receipt_count'] > 0 ? 'red' : 'emerald'"
+                    class="h-full"
+                />
+            </a>
         </div>
 
         {{-- Upcoming charges + action needed --}}

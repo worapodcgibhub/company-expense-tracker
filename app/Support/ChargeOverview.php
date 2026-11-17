@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Enums\ReceiptStatus;
 use App\Enums\SubscriptionCategory;
 use App\Models\AccountingPeriodClosure;
 use App\Models\SubscriptionCharge;
@@ -119,9 +120,40 @@ class ChargeOverview
         return SubscriptionCharge::query()
             ->visibleTo($this->user)
             ->with(['subscription', 'creditCard'])
+            ->withCurrentReceiptCount()
             ->latest('id')
             ->limit($limit)
             ->get();
+    }
+
+    /**
+     * Charged cycles still waiting for a document (not "no receipt
+     * available"), any month. Recording never waits for the receipt.
+     */
+    public function waitingForReceiptCount(): int
+    {
+        return SubscriptionCharge::query()
+            ->visibleTo($this->user)
+            ->receiptStatusIs(ReceiptStatus::Waiting)
+            ->count();
+    }
+
+    /**
+     * Company-wide document status of one month's charges, for the
+     * accounting periods page.
+     *
+     * @return array{waiting: int, unavailable: int, attached: int}
+     */
+    public static function receiptCountsFor(string $period): array
+    {
+        $month = AccountingPeriodClosure::startOf($period);
+        $count = fn (ReceiptStatus $status) => SubscriptionCharge::query()->chargedInMonth($month)->receiptStatusIs($status)->count();
+
+        return [
+            'waiting' => $count(ReceiptStatus::Waiting),
+            'unavailable' => $count(ReceiptStatus::Unavailable),
+            'attached' => $count(ReceiptStatus::Attached),
+        ];
     }
 
     /**

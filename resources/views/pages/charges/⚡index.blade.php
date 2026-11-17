@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\ReceiptStatus;
 use App\Enums\SubscriptionCategory;
 use App\Models\AccountingPeriodClosure;
 use App\Models\CreditCard;
@@ -38,6 +39,10 @@ new #[Title('รายการตัดเงิน')] class extends Component 
     #[Url(except: '')]
     public string $flag = '';
 
+    /** ReceiptStatus value, or "" */
+    #[Url(except: '')]
+    public string $receipt = '';
+
     public function mount(): void
     {
         $this->authorize('viewAny', SubscriptionCharge::class);
@@ -75,7 +80,8 @@ new #[Title('รายการตัดเงิน')] class extends Component 
             ->when($category !== null, fn (Builder $query) => $query->whereIn('subscription_id', Subscription::query()->select('id')->where('category', $category?->value)))
             ->when($this->flag === 'missing_thb', fn (Builder $query) => $query->charged()->where('currency', '!=', 'THB')->whereNull('amount_thb'))
             ->when($this->flag === 'after_close', fn (Builder $query) => $query->where('entered_after_close', true))
-            ->when($this->flag === 'unverified', fn (Builder $query) => $query->charged()->whereNull('verified_at'));
+            ->when($this->flag === 'unverified', fn (Builder $query) => $query->charged()->whereNull('verified_at'))
+            ->when(ReceiptStatus::tryFrom($this->receipt), fn (Builder $query, ReceiptStatus $status) => $query->receiptStatusIs($status));
     }
 
     /**
@@ -86,6 +92,7 @@ new #[Title('รายการตัดเงิน')] class extends Component 
     {
         return $this->query()
             ->with(['subscription', 'creditCard'])
+            ->withCurrentReceiptCount()
             ->orderByRaw('coalesce(charged_on, due_date) desc')
             ->orderByDesc('id')
             ->limit(self::LIMIT)
@@ -120,7 +127,7 @@ new #[Title('รายการตัดเงิน')] class extends Component 
 
     public function resetFilters(): void
     {
-        $this->reset(['month', 'card', 'category', 'flag']);
+        $this->reset(['month', 'card', 'category', 'flag', 'receipt']);
     }
 
     /**
@@ -139,7 +146,7 @@ new #[Title('รายการตัดเงิน')] class extends Component 
     $totals = $this->totals;
     $closure = $this->periodClosure;
     $months = collect(ThaiFormat::recentMonths(12))->reverse();
-    $hasFilters = $month !== '' || $card !== '' || $category !== '' || $flag !== '';
+    $hasFilters = $month !== '' || $card !== '' || $category !== '' || $flag !== '' || $receipt !== '';
 @endphp
 
 <div class="mx-auto flex w-full max-w-6xl flex-col gap-6">
@@ -184,7 +191,7 @@ new #[Title('รายการตัดเงิน')] class extends Component 
     @endif
 
     {{-- Filters --}}
-    <div @class(['grid gap-3', 'sm:grid-cols-2 lg:grid-cols-4' => $seesAll, 'sm:grid-cols-3' => ! $seesAll])>
+    <div @class(['grid gap-3 sm:grid-cols-2', 'lg:grid-cols-5' => $seesAll, 'lg:grid-cols-4' => ! $seesAll])>
         <flux:select wire:model.live="month" aria-label="เดือน">
             <flux:select.option value="">เดือนนี้</flux:select.option>
             @foreach ($months as $m)
@@ -215,6 +222,13 @@ new #[Title('รายการตัดเงิน')] class extends Component 
             <flux:select.option value="missing_thb">รอยอดเงินบาท (USD)</flux:select.option>
             <flux:select.option value="after_close">ย้อนหลัง (หลังปิดงวด)</flux:select.option>
             <flux:select.option value="unverified">ยังไม่ตรวจสอบ</flux:select.option>
+        </flux:select>
+
+        <flux:select wire:model.live="receipt" aria-label="สถานะเอกสาร" data-test="receipt-filter">
+            <flux:select.option value="">เอกสารทุกสถานะ</flux:select.option>
+            @foreach ([ReceiptStatus::Waiting, ReceiptStatus::Unavailable, ReceiptStatus::Attached] as $case)
+                <flux:select.option value="{{ $case->value }}">{{ $case->label() }}</flux:select.option>
+            @endforeach
         </flux:select>
     </div>
 

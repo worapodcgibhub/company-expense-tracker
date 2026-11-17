@@ -63,7 +63,7 @@ new #[Title('Subscription')] class extends Component {
     #[Computed]
     public function charges(): Collection
     {
-        return $this->subscription->charges()->with('recorder')->orderByDesc('due_date')->get();
+        return $this->subscription->charges()->with('recorder')->withCurrentReceiptCount()->orderByDesc('due_date')->get();
     }
 
     /**

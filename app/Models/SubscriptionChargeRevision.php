@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\ChargeOutcome;
 use App\Enums\ChargeRevisionAction;
+use App\Enums\ReceiptKind;
 use App\Support\ThaiFormat;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -80,6 +81,91 @@ class SubscriptionChargeRevision extends Model
         }
 
         return $lines;
+    }
+
+    /**
+     * Human readable lines for a document revision, e.g.
+     * "ไฟล์: receipt.pdf (ใบกำกับภาษี · เลขที่ INV-01 · ลงวันที่ 3 พ.ย. 2569)".
+     *
+     * @return list<string>
+     */
+    public function describeReceipt(): array
+    {
+        if (! $this->action->isReceiptAction() || ! is_array($this->diff)) {
+            return [];
+        }
+
+        $diff = $this->diff;
+        $lines = [];
+
+        if (isset($diff['file']) && is_string($diff['file'])) {
+            $lines[] = ($this->action === ChargeRevisionAction::ReceiptReplaced ? 'ไฟล์ใหม่: ' : 'ไฟล์: ').self::documentLine($diff);
+        }
+
+        if (isset($diff['replaced']) && is_array($diff['replaced'])) {
+            $lines[] = 'ไฟล์เดิม (นำออก): '.self::documentLine($diff['replaced']);
+        }
+
+        if (isset($diff['changes']) && is_array($diff['changes'])) {
+            foreach ($diff['changes'] as $field => $pair) {
+                if (! is_array($pair) || count($pair) !== 2) {
+                    continue;
+                }
+
+                [$old, $new] = array_values($pair);
+                $label = self::RECEIPT_FIELD_LABELS[$field] ?? (string) $field;
+                $lines[] = $label.': '.self::receiptValue((string) $field, $old).' → '.self::receiptValue((string) $field, $new);
+            }
+        }
+
+        if (! empty($diff['cleared_unavailable'])) {
+            $lines[] = 'สถานะ "ไม่มีใบเสร็จ" ถูกยกเลิก เพราะมีเอกสารแล้ว';
+        }
+
+        if (isset($diff['previous_reason']) && is_string($diff['previous_reason'])) {
+            $lines[] = 'เหตุผลเดิม: '.$diff['previous_reason'];
+        }
+
+        return $lines;
+    }
+
+    private const RECEIPT_FIELD_LABELS = [
+        'kind' => 'ชนิดเอกสาร',
+        'document_number' => 'เลขที่เอกสาร',
+        'document_date' => 'วันที่ในเอกสาร',
+    ];
+
+    /**
+     * @param  array<mixed>  $document
+     */
+    private static function documentLine(array $document): string
+    {
+        $parts = [self::receiptValue('kind', $document['kind'] ?? null)];
+
+        if (! empty($document['document_number'])) {
+            $parts[] = 'เลขที่ '.self::receiptValue('document_number', $document['document_number']);
+        }
+
+        if (! empty($document['document_date'])) {
+            $parts[] = 'ลงวันที่ '.self::receiptValue('document_date', $document['document_date']);
+        }
+
+        $file = isset($document['file']) && is_scalar($document['file']) ? (string) $document['file'] : '–';
+
+        return $file.' ('.implode(' · ', $parts).')';
+    }
+
+    private static function receiptValue(string $field, mixed $value): string
+    {
+        if ($value === null || $value === '' || ! is_scalar($value)) {
+            return '–';
+        }
+
+        return match ($field) {
+            'kind' => ReceiptKind::tryFrom((string) $value)?->label() ?? (string) $value,
+            'document_date' => ($date = CarbonImmutable::createFromFormat('!Y-m-d', (string) $value)) ? ThaiFormat::date($date) : (string) $value,
+            default => (string) $value,
+        };
     }
 
     /**

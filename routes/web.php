@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ChargeReceiptController;
 use App\Models\AccountingPeriodClosure;
 use App\Models\CreditCard;
 use App\Models\Subscription;
@@ -60,6 +61,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->middleware('can:update,charge')
         ->whereNumber('charge')
         ->name('charges.edit');
+
+    // Document files (private disk). The only way to open them: checks
+    // ChargeReceiptPolicy::view (same people who may view the charge).
+    Route::get('receipts/{receipt}', [ChargeReceiptController::class, 'show'])
+        ->middleware('can:view,receipt')
+        ->whereNumber('receipt')
+        ->name('receipts.show');
 
     // Owner and Accountant (AccountingPeriodClosurePolicy).
     Route::livewire('accounting-periods', 'pages::accounting-periods.index')

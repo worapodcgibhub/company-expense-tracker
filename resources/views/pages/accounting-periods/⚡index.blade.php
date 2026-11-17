@@ -36,7 +36,7 @@ new #[Title('งวดบัญชี')] class extends Component {
     /**
      * The last MONTHS months, newest first, with their current state.
      *
-     * @return list<array{period: string, month: CarbonImmutable, closure: ?AccountingPeriodClosure, closable: bool, live: array{thb_total: int, charge_count: int, missing_thb_count: int, missing_thb_usd: int}, late_count: int}>
+     * @return list<array{period: string, month: CarbonImmutable, closure: ?AccountingPeriodClosure, closable: bool, live: array{thb_total: int, charge_count: int, missing_thb_count: int, missing_thb_usd: int}, late_count: int, receipts: array{waiting: int, unavailable: int, attached: int}}>
      */
     #[Computed]
     public function periods(): array
@@ -59,6 +59,7 @@ new #[Title('งวดบัญชี')] class extends Component {
                 'closable' => AccountingPeriodClosure::canBeClosed($period),
                 'live' => ChargeOverview::snapshotFor($period),
                 'late_count' => SubscriptionCharge::query()->chargedInMonth($start)->where('entered_after_close', true)->count(),
+                'receipts' => ChargeOverview::receiptCountsFor($period),
             ];
         }
 
@@ -183,6 +184,16 @@ new #[Title('งวดบัญชี')] class extends Component {
                             @endif
                             @if ($row['live']['missing_thb_count'] > 0)
                                 <span class="block text-amber-700">USD ยังไม่มียอดบาท {{ $row['live']['missing_thb_count'] }} รายการ ({{ ThaiFormat::money($row['live']['missing_thb_usd'], 'USD') }})</span>
+                            @endif
+                            @if ($row['live']['charge_count'] > 0)
+                                <span class="block" data-test="receipts-{{ $row['period'] }}">
+                                    เอกสาร: มีแล้ว {{ $row['receipts']['attached'] }}
+                                    · <span @class(['font-medium text-red-600' => $row['receipts']['waiting'] > 0])>รอใบเสร็จ {{ $row['receipts']['waiting'] }}</span>
+                                    · ไม่มีใบเสร็จ {{ $row['receipts']['unavailable'] }}
+                                    @if ($row['receipts']['waiting'] > 0)
+                                        <a href="{{ route('charges.index', ['month' => $row['period'], 'receipt' => 'waiting']) }}" wire:navigate class="text-indigo-600 hover:text-indigo-700">ดูรายการ →</a>
+                                    @endif
+                                </span>
                             @endif
                         </p>
                     </div>
