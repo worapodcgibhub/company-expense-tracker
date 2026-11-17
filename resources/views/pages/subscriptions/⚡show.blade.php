@@ -43,7 +43,7 @@ new #[Title('Subscription')] class extends Component {
     #[Computed]
     public function subscription(): Subscription
     {
-        return Subscription::with(['creditCard', 'responsible', 'creator', 'updater'])->findOrFail($this->subscriptionId);
+        return Subscription::with(['creditCard', 'paymentMethod.creditCard', 'paymentMethod.bankAccount', 'responsible', 'creator', 'updater'])->findOrFail($this->subscriptionId);
     }
 
     /**
@@ -199,6 +199,12 @@ new #[Title('Subscription')] class extends Component {
             return;
         }
 
+        if ($subscription->needsNewPaymentMethod()) {
+            $this->addError('resume_date', 'ช่องทางชำระเงินที่ผูกไว้ถูกปิดใช้งานแล้ว กรุณาแก้ไขให้ใช้ช่องทางที่ยังใช้งานอยู่ก่อน');
+
+            return;
+        }
+
         $subscription->changeStatus(
             SubscriptionStatus::Active,
             auth()->user(),
@@ -270,6 +276,13 @@ new #[Title('Subscription')] class extends Component {
         <flux:callout icon="exclamation-triangle" color="red" data-test="card-deactivated-warning">
             <flux:callout.heading>บัตรที่ใช้ชำระถูกปิดใช้งานแล้ว</flux:callout.heading>
             <flux:callout.text>การตัดเงินครั้งถัดไปอาจไม่ผ่านและบริการอาจหยุด {{ $canManage ? 'กรุณาแก้ไขให้ใช้บัตรที่ยังใช้งานอยู่' : 'กรุณาแจ้งเจ้าของบริษัทให้เปลี่ยนบัตร' }}</flux:callout.text>
+        </flux:callout>
+    @endif
+
+    @if ($s->needsNewPaymentMethod())
+        <flux:callout icon="exclamation-triangle" color="red" data-test="method-deactivated-warning">
+            <flux:callout.heading>ช่องทางชำระเงินถูกปิดใช้งานแล้ว</flux:callout.heading>
+            <flux:callout.text>ช่องทาง "{{ $s->paymentMethod->name }}" (หรือบัตร/บัญชีธนาคารของช่องทางนี้) ถูกปิดใช้งาน การชำระครั้งถัดไปอาจไม่ผ่านและบริการอาจหยุด {{ $canManage ? 'กรุณาแก้ไขให้ใช้บัตรหรือช่องทางที่ยังใช้งานอยู่' : 'กรุณาแจ้งเจ้าของบริษัทให้เปลี่ยนช่องทางชำระเงิน' }} ระบบไม่เปลี่ยนช่องทางให้เอง และประวัติเดิมยังอยู่ครบ</flux:callout.text>
         </flux:callout>
     @endif
 

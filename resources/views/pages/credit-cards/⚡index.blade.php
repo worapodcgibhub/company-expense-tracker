@@ -416,7 +416,7 @@ new #[Title('บัตรที่ใช้ชำระเงิน')] class ext
                                                 icon="no-symbol"
                                                 variant="danger"
                                                 wire:click="deactivate({{ $card->id }})"
-                                                wire:confirm="ปิดใช้งานบัตร {{ $card->name }}?{{ $card->open_subscriptions_count > 0 ? ' ⚠️ ยังมี Subscription '.$card->open_subscriptions_count.' รายการใช้บัตรนี้อยู่ ต้องเปลี่ยนบัตรของรายการเหล่านั้นด้วย มิฉะนั้นการตัดเงินอาจไม่ผ่าน' : '' }} บัตรจะเลือกใช้กับรายการใหม่ไม่ได้ แต่ข้อมูลและประวัติเดิมยังอยู่ครบ"
+                                                wire:confirm="ปิดใช้งานบัตร {{ $card->name }}?{{ $card->open_subscriptions_count > 0 ? ' ⚠️ ยังมี Subscription '.$card->open_subscriptions_count.' รายการใช้บัตรนี้อยู่ ต้องเปลี่ยนบัตรของรายการเหล่านั้นด้วย มิฉะนั้นการตัดเงินอาจไม่ผ่าน' : '' }} ช่องทางชำระเงินของบัตรนี้จะใช้กับรายการใหม่ไม่ได้ด้วย บัตรจะเลือกใช้กับรายการใหม่ไม่ได้ แต่ข้อมูลและประวัติเดิมยังอยู่ครบ"
                                             >ปิดใช้งาน</flux:menu.item>
                                         @endcan
 

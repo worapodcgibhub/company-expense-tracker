@@ -4,6 +4,7 @@ use App\Http\Controllers\ChargeReceiptController;
 use App\Models\AccountingPeriodClosure;
 use App\Models\BankAccount;
 use App\Models\CreditCard;
+use App\Models\PaymentMethod;
 use App\Models\Subscription;
 use App\Models\SubscriptionCharge;
 use App\Models\User;
@@ -30,6 +31,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::livewire('bank-accounts', 'pages::bank-accounts.index')
         ->middleware('can:viewAny,'.BankAccount::class)
         ->name('bank-accounts.index');
+
+    // Owner and Accountant may view; only the Owner manages (PaymentMethodPolicy).
+    Route::livewire('payment-methods', 'pages::payment-methods.index')
+        ->middleware('can:viewAny,'.PaymentMethod::class)
+        ->name('payment-methods.index');
 
     // SubscriptionPolicy: everyone opens the list (Staff see only their own),
     // only the Owner adds or edits. `create` must stay above `{subscription}`.

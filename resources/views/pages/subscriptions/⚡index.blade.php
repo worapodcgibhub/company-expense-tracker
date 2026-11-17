@@ -52,7 +52,7 @@ new #[Title('Subscription')] class extends Component {
 
         return Subscription::query()
             ->visibleTo(auth()->user())
-            ->with(['creditCard', 'responsible'])
+            ->with(['creditCard', 'paymentMethod.creditCard', 'paymentMethod.bankAccount', 'responsible'])
             ->when($status !== null, fn (Builder $query) => $query->where('status', $status?->value))
             ->when(SubscriptionCategory::tryFrom($this->category), fn (Builder $query, SubscriptionCategory $category) => $query->where('category', $category->value))
             ->when(BillingCycle::tryFrom($this->cycle), fn (Builder $query, BillingCycle $cycle) => $query->where('billing_cycle', $cycle->value))
@@ -293,6 +293,9 @@ new #[Title('Subscription')] class extends Component {
                                     @endif
                                     @if ($subscription->needsNewCard())
                                         <x-ui.status-badge tone="red" :dot="false" data-test="card-deactivated-badge">บัตรถูกปิดใช้งาน</x-ui.status-badge>
+                                    @endif
+                                    @if ($subscription->needsNewPaymentMethod())
+                                        <x-ui.status-badge tone="red" :dot="false" data-test="method-deactivated-badge">ช่องทางชำระถูกปิดใช้งาน</x-ui.status-badge>
                                     @endif
                                 </div>
                             </div>

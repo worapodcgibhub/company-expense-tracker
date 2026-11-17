@@ -102,7 +102,11 @@ new #[Title('Subscription')] class extends Component {
     public function cards(): Collection
     {
         return CreditCard::query()
-            ->where(fn ($query) => $query->whereNull('deactivated_at')->orWhere('id', $this->editing?->credit_card_id))
+            ->where(fn ($query) => $query
+                ->where(fn ($usable) => $usable
+                    ->whereNull('deactivated_at')
+                    ->whereHas('paymentMethod', fn ($method) => $method->whereNull('deactivated_at')))
+                ->orWhere('id', $this->editing?->credit_card_id))
             ->orderBy('name')
             ->get();
     }
@@ -192,8 +196,22 @@ new #[Title('Subscription')] class extends Component {
                 }
             }],
             'credit_card_id' => ['required', 'integer', Rule::exists('credit_cards', 'id'), function ($attribute, $value, $fail) use ($editing) {
-                if ((int) $value !== $editing?->credit_card_id && CreditCard::whereKey((int) $value)->whereNull('deactivated_at')->doesntExist()) {
+                if ((int) $value === $editing?->credit_card_id) {
+                    return;
+                }
+
+                $card = CreditCard::with('paymentMethod.creditCard')->find((int) $value);
+
+                if ($card === null) {
+                    return;
+                }
+
+                if (! $card->isActive()) {
                     $fail('บัตรนี้ถูกปิดใช้งานแล้ว เลือกบัตรที่ยังใช้งานอยู่');
+                } elseif ($card->paymentMethod === null) {
+                    $fail('บัตรนี้ยังไม่มีช่องทางชำระเงิน เลือกบัตรอื่น หรือตั้งค่าช่องทางชำระเงินของบัตรก่อน');
+                } elseif (! $card->paymentMethod->isUsable()) {
+                    $fail('ช่องทางชำระเงินของบัตรนี้ถูกปิดใช้งานอยู่ เลือกบัตรอื่น หรือเปิดใช้งานช่องทางนั้นก่อน');
                 }
             }],
             'billing_cycle' => ['required', Rule::enum(BillingCycle::class)],
@@ -382,6 +400,9 @@ new #[Title('Subscription')] class extends Component {
                     </flux:select>
                     @if ($editing && ! $editing->creditCard->isActive())
                         <flux:text class="mt-1 text-xs !text-red-700" data-test="card-deactivated-warning">บัตรเดิมถูกปิดใช้งานแล้ว การตัดเงินอาจไม่ผ่าน ควรเปลี่ยนเป็นบัตรที่ยังใช้งานอยู่</flux:text>
+                    @endif
+                    @if ($editing && $editing->needsNewPaymentMethod())
+                        <flux:text class="mt-1 text-xs !text-red-700" data-test="method-deactivated-warning">ช่องทางชำระเงินของบัตรเดิมถูกปิดใช้งานแล้ว การชำระอาจไม่ผ่าน ควรเปลี่ยนเป็นบัตรที่ช่องทางยังใช้งานอยู่ หรือให้เจ้าของบริษัทเปิดใช้งานช่องทางนั้นอีกครั้ง</flux:text>
                     @endif
                     @if ($this->cards->isEmpty())
                         <flux:text class="mt-1 text-xs">ยังไม่มีบัตรที่ใช้งานอยู่ <a href="{{ route('credit-cards.index') }}" class="underline" wire:navigate>เพิ่มบัตรก่อน</a></flux:text>

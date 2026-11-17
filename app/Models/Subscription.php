@@ -189,6 +189,29 @@ class Subscription extends Model
     }
 
     /**
+     * Not cancelled, its card (if any) is fine, but its payment method has
+     * been deactivated, or the bank account behind it has: the next payment
+     * may not go through. Nothing is changed for the subscription; the person
+     * responsible has to choose another method.
+     */
+    public function needsNewPaymentMethod(): bool
+    {
+        return ! $this->isCancelled()
+            && ! $this->needsNewCard()
+            && $this->paymentMethod !== null
+            && ! $this->paymentMethod->isUsable();
+    }
+
+    /**
+     * New subscriptions (or a changed card) cannot use a method that is
+     * switched off. See ResolvesPaymentMethod.
+     */
+    protected function rejectsUnusablePaymentMethod(): bool
+    {
+        return true;
+    }
+
+    /**
      * "อีก 3 วัน", "วันนี้", "พรุ่งนี้", "เลยกำหนด 2 วัน".
      */
     public function dueLabel(?DateTimeInterface $today = null): string

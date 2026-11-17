@@ -32,6 +32,7 @@
     $actionItems = $subscriptions->overdue()
         ->map(fn ($s) => ['url' => route('subscriptions.show', $s), 'name' => $s->name, 'label' => $s->dueLabel($today).' · ยังไม่บันทึกยอดตัดจริง'])
         ->concat($subscriptions->needingNewCard()->map(fn ($s) => ['url' => route('subscriptions.show', $s), 'name' => $s->name, 'label' => 'บัตรถูกปิดใช้งาน ต้องเปลี่ยนบัตร']))
+        ->concat($subscriptions->needingNewPaymentMethod()->map(fn ($s) => ['url' => route('subscriptions.show', $s), 'name' => $s->name, 'label' => 'ช่องทางชำระเงินถูกปิดใช้งาน ต้องเปลี่ยนช่องทาง']))
         ->concat($charges->afterCloseUnverified()->map(fn ($c) => ['url' => route('charges.show', $c), 'name' => $c->subscription->name, 'label' => 'รายการย้อนหลังในงวดที่ปิดแล้ว รอฝ่ายบัญชีตรวจ']))
         ->values();
     $missingThb = $charges->missingThb();

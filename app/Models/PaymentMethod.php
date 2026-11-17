@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
 
 /**
@@ -55,6 +56,18 @@ class PaymentMethod extends Model
         return $this->deactivated_at === null;
     }
 
+    /**
+     * Can be chosen for something new: the method itself is active and so
+     * is the card or bank account behind it. Old data that already points at
+     * an unusable method keeps showing; it is just not offered again.
+     */
+    public function isUsable(): bool
+    {
+        return $this->isActive()
+            && ($this->creditCard === null || $this->creditCard->isActive())
+            && ($this->bankAccount === null || $this->bankAccount->isActive());
+    }
+
     public function isAuto(): bool
     {
         return $this->settlement === SettlementMode::Auto;
@@ -67,6 +80,22 @@ class PaymentMethod extends Model
     {
         return ($this->type->requiresCard() ? $this->credit_card_id !== null : $this->credit_card_id === null)
             && ($this->type->requiresBankAccount() ? $this->bank_account_id !== null : $this->bank_account_id === null);
+    }
+
+    /**
+     * @return HasMany<Subscription, $this>
+     */
+    public function subscriptions(): HasMany
+    {
+        return $this->hasMany(Subscription::class);
+    }
+
+    /**
+     * @return HasMany<SubscriptionCharge, $this>
+     */
+    public function charges(): HasMany
+    {
+        return $this->hasMany(SubscriptionCharge::class);
     }
 
     /**

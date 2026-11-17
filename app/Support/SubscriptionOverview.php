@@ -32,7 +32,7 @@ class SubscriptionOverview
         $this->open = Subscription::query()
             ->visibleTo($user)
             ->where('status', '!=', SubscriptionStatus::Cancelled->value)
-            ->with(['creditCard', 'responsible'])
+            ->with(['creditCard', 'paymentMethod.creditCard', 'paymentMethod.bankAccount', 'responsible'])
             ->orderBy('next_charge_date')
             ->orderBy('name')
             ->get();
@@ -74,6 +74,17 @@ class SubscriptionOverview
     public function needingNewCard(): Collection
     {
         return $this->open->filter(fn (Subscription $s) => $s->needsNewCard())->values();
+    }
+
+    /**
+     * Not cancelled, card fine, but the payment method (or its bank account)
+     * has been deactivated.
+     *
+     * @return Collection<int, Subscription>
+     */
+    public function needingNewPaymentMethod(): Collection
+    {
+        return $this->open->filter(fn (Subscription $s) => $s->needsNewPaymentMethod())->values();
     }
 
     /**

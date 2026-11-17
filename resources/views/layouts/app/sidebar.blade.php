@@ -42,6 +42,12 @@
                             </flux:sidebar.item>
                         @endcan
 
+                        @can('viewAny', \App\Models\PaymentMethod::class)
+                            <flux:sidebar.item icon="wallet" :href="route('payment-methods.index')" :current="request()->routeIs('payment-methods.*')" wire:navigate data-test="payment-methods-menu">
+                                {{ __('ช่องทางชำระเงิน') }}
+                            </flux:sidebar.item>
+                        @endcan
+
                         @can('viewAny', \App\Models\AccountingPeriodClosure::class)
                             <flux:sidebar.item icon="lock-closed" :href="route('accounting-periods.index')" :current="request()->routeIs('accounting-periods.*')" wire:navigate data-test="accounting-periods-menu">
                                 {{ __('งวดบัญชี') }}
