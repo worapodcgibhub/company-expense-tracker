@@ -4,6 +4,8 @@ namespace App\Models;
 
 use App\Enums\CardKind;
 use App\Enums\CardNetwork;
+use App\Enums\PaymentMethodType;
+use App\Enums\SettlementMode;
 use Database\Factories\CreditCardFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Scope;
@@ -15,7 +17,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Throwable;
 
 /**
  * A card the company pays services and subscriptions with.
@@ -116,6 +120,45 @@ class CreditCard extends Model
     public function paymentMethod(): HasOne
     {
         return $this->hasOne(PaymentMethod::class);
+    }
+
+    /**
+     * Save a NEW card together with its card payment method, in one database
+     * transaction: either both exist afterwards or neither does. A card never
+     * gets a second method (also enforced by a unique index); if one already
+     * exists it is kept. Existing cards are never changed by this.
+     */
+    public function saveWithPaymentMethod(): void
+    {
+        $wasNew = ! $this->exists;
+
+        try {
+            DB::transaction(function () {
+                $this->save();
+
+                if (! $this->paymentMethod()->exists()) {
+                    $method = $this->paymentMethod()->make([
+                        'name' => $this->name,
+                        'type' => PaymentMethodType::Card,
+                        'settlement' => SettlementMode::Auto,
+                    ]);
+
+                    $method->forceFill([
+                        'created_by' => $this->created_by,
+                        'updated_by' => $this->updated_by,
+                    ])->save();
+                }
+            });
+        } catch (Throwable $e) {
+            if ($wasNew) {
+                // The rollback removed the row; make the object match.
+                $this->exists = false;
+                $this->wasRecentlyCreated = false;
+                unset($this->attributes[$this->getKeyName()]);
+            }
+
+            throw $e;
+        }
     }
 
     /**

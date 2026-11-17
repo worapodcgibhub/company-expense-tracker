@@ -224,7 +224,10 @@ new #[Title('บัตรที่ใช้ชำระเงิน')] class ext
             $card->forceFill(['created_by' => auth()->id()]);
         }
 
-        $card->forceFill(['updated_by' => auth()->id()])->save();
+        $card->forceFill(['updated_by' => auth()->id()]);
+
+        // A new card also gets its card payment method, in one transaction.
+        $editing ? $card->save() : $card->saveWithPaymentMethod();
 
         $this->resetForm();
         unset($this->cards, $this->counts);

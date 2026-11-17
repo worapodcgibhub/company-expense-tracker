@@ -172,7 +172,10 @@ class SampleDataSeeder extends Seeder
             'last_four' => '4242',
             'holder_name' => 'SAMPLE COMPANY',
             'notes' => self::MARKER,
-        ])->save();
+        ]);
+
+        // Phase 3.1b: the card and its payment method are saved together.
+        $card->saveWithPaymentMethod();
 
         return $card;
     }

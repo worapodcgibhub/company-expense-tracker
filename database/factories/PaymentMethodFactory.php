@@ -25,9 +25,25 @@ class PaymentMethodFactory extends Factory
             'name' => 'ช่องทาง '.fake()->unique()->word(),
             'type' => PaymentMethodType::Card,
             'settlement' => SettlementMode::Auto,
-            'credit_card_id' => CreditCard::factory(),
+            'credit_card_id' => CreditCard::factory()->withoutPaymentMethod(),
             'bank_account_id' => null,
         ];
+    }
+
+    /**
+     * The card's existing payment method, or a plain card/auto one when a
+     * test card has none yet. Test helper only — the app never does this.
+     */
+    public static function ensureForCard(int $cardId): PaymentMethod
+    {
+        return PaymentMethod::query()->firstOrCreate(
+            ['credit_card_id' => $cardId],
+            [
+                'name' => 'บัตร '.$cardId,
+                'type' => PaymentMethodType::Card,
+                'settlement' => SettlementMode::Auto,
+            ],
+        );
     }
 
     public function forBankAccount(PaymentMethodType $type = PaymentMethodType::BankTransfer): static

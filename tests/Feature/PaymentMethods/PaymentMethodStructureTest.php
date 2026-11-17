@@ -24,6 +24,17 @@ function runPaymentMethodBackfill(): void
     $migration->backfill();
 }
 
+/**
+ * Put the test data back into the shape it had before Phase 3.1a: no payment
+ * methods at all and no payment_method_id on subscriptions / charges.
+ */
+function resetToLegacyPaymentMethodState(): void
+{
+    DB::table('subscriptions')->update(['payment_method_id' => null]);
+    DB::table('subscription_charges')->update(['payment_method_id' => null]);
+    DB::table('payment_methods')->delete();
+}
+
 test('bank accounts keep only non-secret fields', function () {
     expect(Schema::getColumnListing('bank_accounts'))->toEqualCanonicalizing([
         'id', 'name', 'bank', 'account_name', 'last_four', 'kind', 'notes',
@@ -69,7 +80,7 @@ test('payment methods link to the right target for each type', function () {
 });
 
 test('a card can have only one payment method', function () {
-    $card = CreditCard::factory()->create();
+    $card = CreditCard::factory()->withoutPaymentMethod()->create();
     PaymentMethod::factory()->create(['credit_card_id' => $card->id]);
 
     PaymentMethod::factory()->create(['credit_card_id' => $card->id]);
@@ -87,6 +98,7 @@ test('backfill gives every existing card a card payment method and links subscri
 
     $subscription = Subscription::factory()->chargingOn(CarbonImmutable::parse('2026-11-14'))->create(['credit_card_id' => $active->id]);
     $charge = SubscriptionCharge::factory()->for($subscription)->create();
+    resetToLegacyPaymentMethodState();
     $cardsBefore = DB::table('credit_cards')->get()->all();
     $subsBefore = DB::table('subscriptions')->first();
 
@@ -114,6 +126,7 @@ test('backfill gives every existing card a card payment method and links subscri
 
 test('backfill is safe to run twice', function () {
     $subscription = Subscription::factory()->create();
+    resetToLegacyPaymentMethodState();
 
     runPaymentMethodBackfill();
     $firstId = $subscription->fresh()->payment_method_id;

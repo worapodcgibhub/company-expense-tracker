@@ -9,6 +9,7 @@ use App\Enums\Currency;
 use App\Enums\SubscriptionCategory;
 use App\Enums\SubscriptionStatus;
 use App\Exceptions\ChargeConflictException;
+use App\Models\Concerns\ResolvesPaymentMethod;
 use App\Support\BillingSchedule;
 use App\Support\ThaiFormat;
 use Carbon\CarbonImmutable;
@@ -44,7 +45,8 @@ use LogicException;
  * @property string $vendor
  * @property SubscriptionCategory $category
  * @property int $responsible_user_id
- * @property int $credit_card_id
+ * @property int|null $credit_card_id
+ * @property int|null $payment_method_id
  * @property BillingCycle $billing_cycle
  * @property int $billing_day
  * @property CarbonImmutable $next_charge_date
@@ -69,6 +71,8 @@ class Subscription extends Model
 {
     /** @use HasFactory<SubscriptionFactory> */
     use HasFactory;
+
+    use ResolvesPaymentMethod;
 
     /**
      * Allowed status changes: from => [to, ...].
@@ -258,6 +262,14 @@ class Subscription extends Model
     public function creditCard(): BelongsTo
     {
         return $this->belongsTo(CreditCard::class);
+    }
+
+    /**
+     * @return BelongsTo<PaymentMethod, $this>
+     */
+    public function paymentMethod(): BelongsTo
+    {
+        return $this->belongsTo(PaymentMethod::class);
     }
 
     /**

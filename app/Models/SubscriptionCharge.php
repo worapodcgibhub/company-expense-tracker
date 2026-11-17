@@ -8,6 +8,7 @@ use App\Enums\Currency;
 use App\Enums\ReceiptKind;
 use App\Enums\ReceiptStatus;
 use App\Exceptions\ChargeConflictException;
+use App\Models\Concerns\ResolvesPaymentMethod;
 use App\Support\ReceiptStorage;
 use App\Support\ThaiFormat;
 use Carbon\CarbonImmutable;
@@ -47,7 +48,8 @@ use Throwable;
  *
  * @property int $id
  * @property int $subscription_id
- * @property int $credit_card_id
+ * @property int|null $credit_card_id
+ * @property int|null $payment_method_id
  * @property CarbonImmutable $due_date
  * @property ChargeOutcome $outcome
  * @property CarbonImmutable|null $charged_on
@@ -76,6 +78,8 @@ class SubscriptionCharge extends Model
 {
     /** @use HasFactory<SubscriptionChargeFactory> */
     use HasFactory;
+
+    use ResolvesPaymentMethod;
 
     /**
      * A cycle may be recorded from this many days before its due date
@@ -495,6 +499,14 @@ class SubscriptionCharge extends Model
     public function creditCard(): BelongsTo
     {
         return $this->belongsTo(CreditCard::class);
+    }
+
+    /**
+     * @return BelongsTo<PaymentMethod, $this>
+     */
+    public function paymentMethod(): BelongsTo
+    {
+        return $this->belongsTo(PaymentMethod::class);
     }
 
     /**

@@ -17,6 +17,18 @@ use Illuminate\Database\Eloquent\Factories\Factory;
 class SubscriptionFactory extends Factory
 {
     /**
+     * Phase 3.1b: a saved subscription needs its card's payment method.
+     */
+    public function configure(): static
+    {
+        return $this->afterMaking(function (Subscription $subscription) {
+            if ($subscription->credit_card_id !== null) {
+                PaymentMethodFactory::ensureForCard($subscription->credit_card_id);
+            }
+        });
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function definition(): array
