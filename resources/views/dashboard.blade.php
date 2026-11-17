@@ -26,14 +26,31 @@
         'month_missing_thb_usd' => $thisMonth['missing_thb_usd'],
         'recorded_count' => $thisMonth['charge_count'],
         'upcoming_7d_count' => $subscriptions->upcoming(7)->count(),
+        'upcoming_7d_split' => $subscriptions->upcomingBySettlement(7),
         'missing_receipt_count' => $charges->waitingForReceiptCount(),
     ];
     $upcomingCharges = $subscriptions->upcoming(30);
-    $actionItems = $subscriptions->overdue()
-        ->map(fn ($s) => ['url' => route('subscriptions.show', $s), 'name' => $s->name, 'label' => $s->dueLabel($today).' · ยังไม่บันทึกยอดตัดจริง'])
-        ->concat($subscriptions->needingNewCard()->map(fn ($s) => ['url' => route('subscriptions.show', $s), 'name' => $s->name, 'label' => 'บัตรถูกปิดใช้งาน ต้องเปลี่ยนบัตร']))
-        ->concat($subscriptions->needingNewPaymentMethod()->map(fn ($s) => ['url' => route('subscriptions.show', $s), 'name' => $s->name, 'label' => 'ช่องทางชำระเงินถูกปิดใช้งาน ต้องเปลี่ยนช่องทาง']))
-        ->concat($charges->afterCloseUnverified()->map(fn ($c) => ['url' => route('charges.show', $c), 'name' => $c->subscription->name, 'label' => 'รายการย้อนหลังในงวดที่ปิดแล้ว รอฝ่ายบัญชีตรวจ']))
+
+    /*
+     * Action needed (Phase 3.1e-4). Nothing here is counted as paid: a
+     * payment only counts once its actual charge is recorded / confirmed
+     * (SubscriptionCharge). Red = past due and not confirmed (or a broken
+     * card / method / late entry); amber = due now or soon, not late yet.
+     * Each subscription falls in at most one of the payment groups.
+     */
+    $payUrl = fn ($s) => $user->can('create', [\App\Models\SubscriptionCharge::class, $s]) && $s->canRecordChargeOn($today)
+        ? route('charges.create', $s)
+        : route('subscriptions.show', $s);
+    $makeItem = fn ($s, string $label, string $tone, string $kind) => ['url' => $payUrl($s), 'name' => $s->name, 'label' => $label, 'tone' => $tone, 'kind' => $kind, 'channel' => $s->paymentMethod?->name];
+    $autoAwaiting = $subscriptions->autoAwaitingConfirmation();
+    $actionItems = $subscriptions->manualOverdue()
+        ->map(fn ($s) => $makeItem($s, $s->dueLabel($today).' · ต้องชำระเอง ยังไม่ได้ยืนยันการชำระ', 'red', 'manual-overdue'))
+        ->concat($autoAwaiting->filter(fn ($s) => $s->isOverdue($today))->map(fn ($s) => $makeItem($s, $s->dueLabel($today).' · รอยืนยันยอดตัดจริง (Auto)', 'red', 'auto-overdue')))
+        ->concat($subscriptions->needingNewCard()->map(fn ($s) => ['url' => route('subscriptions.show', $s), 'name' => $s->name, 'label' => 'บัตรถูกปิดใช้งาน ต้องเปลี่ยนบัตร', 'tone' => 'red', 'kind' => 'card', 'channel' => null]))
+        ->concat($subscriptions->needingNewPaymentMethod()->map(fn ($s) => ['url' => route('subscriptions.show', $s), 'name' => $s->name, 'label' => 'ช่องทางชำระเงินถูกปิดใช้งาน ต้องเปลี่ยนช่องทาง', 'tone' => 'red', 'kind' => 'method', 'channel' => null]))
+        ->concat($charges->afterCloseUnverified()->map(fn ($c) => ['url' => route('charges.show', $c), 'name' => $c->subscription->name, 'label' => 'รายการย้อนหลังในงวดที่ปิดแล้ว รอฝ่ายบัญชีตรวจ', 'tone' => 'red', 'kind' => 'after-close', 'channel' => null]))
+        ->concat($autoAwaiting->reject(fn ($s) => $s->isOverdue($today))->map(fn ($s) => $makeItem($s, 'ถึงกำหนดวันนี้ · รอยืนยันยอดตัดจริง (Auto)', 'amber', 'auto-due')))
+        ->concat($subscriptions->manualDueSoon(7)->map(fn ($s) => $makeItem($s, ThaiFormat::date($s->next_charge_date).' · '.$s->dueLabel($today).' · ต้องชำระเอง (Manual)', 'amber', 'manual-due')))
         ->values();
     $missingThb = $charges->missingThb();
     $recentExpenses = $charges->recent(5);
@@ -55,7 +72,7 @@
                 <h1 class="mt-1 truncate text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
                     {{ __('สวัสดี') }}, {{ \Illuminate\Support\Str::before($user->name, ' ') ?: $user->name }} 👋
                 </h1>
-                <p class="mt-1 text-sm text-slate-500">{{ __('ภาพรวมค่าใช้จ่ายและรอบตัดบัตรของบริษัท') }}</p>
+                <p class="mt-1 text-sm text-slate-500">{{ __('ภาพรวมค่าใช้จ่ายและกำหนดชำระของบริษัท') }}</p>
             </div>
             <x-ui.status-badge tone="emerald" class="self-start sm:self-auto">
                 {{ $user->role->label() }}
@@ -97,16 +114,16 @@
                 tone="indigo"
             />
             <x-ui.stat-card
-                :title="__('บันทึกแล้วเดือนนี้')"
+                :title="__('บันทึกจ่ายจริงแล้ว')"
                 :value="number_format($summary['recorded_count']).' '.__('รายการ')"
-                :hint="__('รายการที่บันทึกยอดตัดจริงแล้ว')"
+                :hint="__('เดือนนี้ · บันทึกยอดตัดจริงหรือยืนยันการชำระแล้ว')"
                 icon="clipboard-document-check"
                 tone="cyan"
             />
             <x-ui.stat-card
-                :title="__('ใกล้ถึงรอบตัดบัตร')"
+                :title="__('ใกล้ถึงกำหนดชำระ')"
                 :value="number_format($summary['upcoming_7d_count']).' '.__('รายการ')"
-                :hint="__('ภายใน 7 วันข้างหน้า')"
+                :hint="'ภายใน 7 วัน · ต้องชำระเอง '.$summary['upcoming_7d_split']['manual'].' · ตัดอัตโนมัติ '.$summary['upcoming_7d_split']['auto']"
                 icon="calendar-days"
                 tone="amber"
             />
@@ -126,9 +143,9 @@
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <x-ui.card class="lg:col-span-2">
                 <x-ui.section-header
-                    :title="__('รอบตัดบัตรที่กำลังจะถึง')"
-                    :description="__('ค่าใช้จ่ายประจำที่จะถูกตัดเงินภายใน 30 วัน')"
-                    icon="credit-card"
+                    :title="__('กำหนดชำระที่กำลังจะถึง')"
+                    :description="__('ค่าใช้จ่ายประจำทุกช่องทางที่ถึงกำหนดภายใน 30 วัน')"
+                    icon="calendar-days"
                 />
 
                 <div class="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600" data-test="subscription-overview">
@@ -147,8 +164,8 @@
                 @if ($upcomingCharges->isEmpty())
                     <x-ui.empty-state
                         icon="calendar"
-                        :title="__('ยังไม่มีรอบตัดบัตรที่กำลังจะถึง')"
-                        :description="__('เมื่อลงทะเบียนค่าใช้จ่ายประจำ เช่น Adobe, Microsoft 365 หรือค่า Hosting รอบตัดเงินถัดไปจะแสดงที่นี่')"
+                        :title="__('ยังไม่มีกำหนดชำระที่กำลังจะถึง')"
+                        :description="__('เมื่อลงทะเบียนค่าใช้จ่ายประจำ เช่น Adobe, ค่า Hosting หรือค่าเช่า Colocation กำหนดชำระถัดไปจะแสดงที่นี่')"
                     />
                 @else
                     <ul class="divide-y divide-slate-100" data-test="upcoming-charges">
@@ -158,7 +175,18 @@
                                 <a href="{{ route('subscriptions.show', $charge) }}" wire:navigate class="flex items-center justify-between gap-3 py-3 hover:bg-slate-50">
                                     <div class="min-w-0">
                                         <p class="truncate font-medium text-slate-900">{{ $charge->name }}</p>
-                                        <p class="truncate text-xs text-slate-500">{{ $charge->creditCard?->maskedNumber() ?? $charge->paymentMethod?->name ?? '–' }} · {{ $charge->responsible->name }}</p>
+                                        @php
+                                            $channel = $charge->paymentMethod;
+                                            $target = $channel?->creditCard?->maskedNumber() ?? $channel?->bankAccount?->maskedNumber();
+                                        @endphp
+                                        <p class="flex min-w-0 items-center gap-1.5 text-xs text-slate-500" data-test="upcoming-channel">
+                                            <span class="truncate">{{ $channel?->name ?? $charge->creditCard?->maskedNumber() ?? '–' }}@if ($target) <span class="font-mono tracking-wider">{{ $target }}</span>@endif · {{ $charge->responsible->name }}</span>
+                                            <span @class([
+                                                'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none',
+                                                'bg-indigo-50 text-indigo-700' => ! $charge->isManual(),
+                                                'bg-amber-50 text-amber-800' => $charge->isManual(),
+                                            ]) data-test="upcoming-settlement">{{ $charge->isManual() ? 'Manual' : 'Auto' }}</span>
+                                        </p>
                                     </div>
                                     <div class="shrink-0 text-end">
                                         <p class="text-sm font-semibold text-slate-900">{{ ThaiFormat::money($charge->estimated_amount, $charge->currency->value) }}</p>
@@ -177,7 +205,7 @@
             <x-ui.card>
                 <x-ui.section-header
                     :title="__('ต้องดำเนินการ')"
-                    :description="__('รายการที่เลยกำหนดหรือยังไม่ยืนยันยอด')"
+                    :description="__('รายการที่ต้องชำระเอง เลยกำหนด หรือรอยืนยันยอดจริง')"
                     icon="exclamation-triangle"
                 />
 
@@ -192,12 +220,20 @@
                 @else
                     <ul class="space-y-2" data-test="action-items">
                         @foreach ($actionItems as $item)
-                            <li>
-                                <a href="{{ $item['url'] }}" wire:navigate class="flex items-start gap-3 rounded-lg bg-red-50/60 p-3 ring-1 ring-red-100 hover:bg-red-50">
-                                    <flux:icon icon="exclamation-triangle" class="mt-0.5 size-4 shrink-0 text-red-500" />
+                            @php $red = $item['tone'] === 'red'; @endphp
+                            <li data-test="action-item-{{ $item['kind'] }}">
+                                <a href="{{ $item['url'] }}" wire:navigate @class([
+                                    'flex items-start gap-3 rounded-lg p-3 ring-1',
+                                    'bg-red-50/60 ring-red-100 hover:bg-red-50' => $red,
+                                    'bg-amber-50/60 ring-amber-100 hover:bg-amber-50' => ! $red,
+                                ])>
+                                    <flux:icon :icon="$red ? 'exclamation-triangle' : 'clock'" @class(['mt-0.5 size-4 shrink-0', 'text-red-500' => $red, 'text-amber-500' => ! $red]) />
                                     <span class="min-w-0">
                                         <span class="block truncate text-sm font-medium text-slate-900">{{ $item['name'] }}</span>
-                                        <span class="block text-xs text-red-700">{{ $item['label'] }}</span>
+                                        <span @class(['block text-xs', 'text-red-700' => $red, 'text-amber-800' => ! $red])>{{ $item['label'] }}</span>
+                                        @if ($item['channel'])
+                                            <span class="block truncate text-xs text-slate-500">{{ $item['channel'] }}</span>
+                                        @endif
                                     </span>
                                 </a>
                             </li>
@@ -251,7 +287,7 @@
                     icon="receipt-percent"
                     tone="cyan"
                     :title="__('ยังไม่มีการบันทึกค่าใช้จ่าย')"
-                    :description="__('เมื่อบันทึกยอดตัดบัตรจริง รายการจะแสดงที่นี่')"
+                    :description="__('เมื่อบันทึกยอดตัดจริงหรือยืนยันการชำระ รายการจะแสดงที่นี่')"
                 />
             @else
                 <ul class="divide-y divide-slate-100" data-test="recent-expenses">
@@ -263,6 +299,9 @@
                                     <p class="truncate text-xs text-slate-500">
                                         {{ $expense->charged_on ? ThaiFormat::date($expense->charged_on) : 'รอบ '.ThaiFormat::date($expense->due_date) }}
                                         · {{ $expense->creditCard?->maskedNumber() ?? $expense->paymentMethod?->name ?? '–' }}
+                                        @if ($expense->paymentMethod)
+                                            · {{ $expense->paymentMethod->isAuto() ? 'Auto' : 'Manual' }}
+                                        @endif
                                     </p>
                                 </div>
                                 <div class="flex flex-col gap-1 sm:items-end">

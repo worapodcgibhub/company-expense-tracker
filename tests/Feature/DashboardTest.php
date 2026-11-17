@@ -24,11 +24,11 @@ test('dashboard shows the summary cards and sections in Thai', function () {
         ->assertSee(ThaiFormat::dateWithDay(now()))
         ->assertSeeInOrder([
             'ค่าใช้จ่ายเดือนนี้',
-            'บันทึกแล้วเดือนนี้',
-            'ใกล้ถึงรอบตัดบัตร',
+            'บันทึกจ่ายจริงแล้ว',
+            'ใกล้ถึงกำหนดชำระ',
             'ขาดใบเสร็จ',
         ])
-        ->assertSee('รอบตัดบัตรที่กำลังจะถึง')
+        ->assertSee('กำหนดชำระที่กำลังจะถึง')
         ->assertSee('ต้องดำเนินการ')
         ->assertSee('ค่าใช้จ่ายรายเดือน')
         ->assertSee('แยกตามหมวดหมู่')
@@ -40,7 +40,7 @@ test('dashboard shows empty states and zero totals when there is no data', funct
         ->get(route('dashboard'))
         ->assertOk()
         ->assertSee('฿0.00')
-        ->assertSee('ยังไม่มีรอบตัดบัตรที่กำลังจะถึง')
+        ->assertSee('ยังไม่มีกำหนดชำระที่กำลังจะถึง')
         ->assertSee('ไม่มีรายการค้าง')
         ->assertSee('ยังไม่มีข้อมูลค่าใช้จ่าย')
         ->assertSee('ยังไม่มีข้อมูลหมวดหมู่')

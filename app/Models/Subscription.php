@@ -182,6 +182,16 @@ class Subscription extends Model
     }
 
     /**
+     * Paid by someone by hand (transfer / PromptPay / cash) and confirmed in
+     * the system, as opposed to taken automatically (card, direct debit).
+     * The setting comes from the payment method.
+     */
+    public function isManual(): bool
+    {
+        return $this->paymentMethod !== null && ! $this->paymentMethod->isAuto();
+    }
+
+    /**
      * Not cancelled, but its card has been deactivated: the next charge may
      * fail and the service may stop.
      */

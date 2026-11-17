@@ -67,6 +67,54 @@ class SubscriptionOverview
     }
 
     /**
+     * Manual subscriptions (transfer / PromptPay / cash) due from today up to
+     * $days days ahead: someone has to pay them.
+     *
+     * @return Collection<int, Subscription>
+     */
+    public function manualDueSoon(int $days = 7): Collection
+    {
+        return $this->upcoming($days)->filter(fn (Subscription $s) => $s->isManual())->values();
+    }
+
+    /**
+     * Manual subscriptions past their due date and not confirmed as paid.
+     *
+     * @return Collection<int, Subscription>
+     */
+    public function manualOverdue(): Collection
+    {
+        return $this->overdue()->filter(fn (Subscription $s) => $s->isManual())->values();
+    }
+
+    /**
+     * Auto subscriptions (card, direct debit) whose due date is today or has
+     * passed, with no actual charge recorded for that cycle yet. They are
+     * NOT paid until someone records the actual amount.
+     *
+     * @return Collection<int, Subscription>
+     */
+    public function autoAwaitingConfirmation(): Collection
+    {
+        return $this->active()
+            ->filter(fn (Subscription $s) => ! $s->isManual() && $s->daysUntilCharge($this->today) <= 0)
+            ->values();
+    }
+
+    /**
+     * How many of the subscriptions due within $days days are Manual / Auto.
+     *
+     * @return array{manual: int, auto: int}
+     */
+    public function upcomingBySettlement(int $days): array
+    {
+        $upcoming = $this->upcoming($days);
+        $manual = $upcoming->filter(fn (Subscription $s) => $s->isManual())->count();
+
+        return ['manual' => $manual, 'auto' => $upcoming->count() - $manual];
+    }
+
+    /**
      * Not cancelled, but paid with a card that has been deactivated.
      *
      * @return Collection<int, Subscription>
