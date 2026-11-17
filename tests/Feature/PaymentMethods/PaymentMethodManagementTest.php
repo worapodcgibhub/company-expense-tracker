@@ -716,8 +716,8 @@ test('the subscription form does not offer a card whose method is deactivated, b
 
     $cards = Livewire::actingAs(User::factory()->owner()->create())
         ->test('pages::subscriptions.form', ['subscription' => $current])
-        ->instance()->cards;
+        ->instance()->methods;
 
-    expect($cards->pluck('id')->all())->toContain($current->credit_card_id)
-        ->and($cards->pluck('id')->all())->not->toContain($offAndUnused->id);
+    expect($cards->pluck('id')->all())->toContain($current->payment_method_id)
+        ->and($cards->pluck('id')->all())->not->toContain($offAndUnused->paymentMethod->id);
 });

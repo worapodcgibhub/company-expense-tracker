@@ -128,6 +128,10 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
             return 'รอบนี้ถูกบันทึกไปแล้ว หรือวันตัดบัตรถูกเปลี่ยน กรุณากลับไปหน้ารายละเอียด';
         }
 
+        if ($s->credit_card_id === null) {
+            return 'การบันทึกยอดของช่องทางที่ไม่ใช่บัตรเครดิตจะเปิดให้ใช้ในขั้นถัดไป (Phase 3.1e-3)';
+        }
+
         if (! $s->canRecordChargeOn()) {
             return 'บันทึกยอดของรอบนี้ได้ตั้งแต่ '.ThaiFormat::date($s->next_charge_date->subDays(SubscriptionCharge::RECORD_AHEAD_DAYS)).' (ก่อนวันตัดบัตร '.SubscriptionCharge::RECORD_AHEAD_DAYS.' วัน)';
         }

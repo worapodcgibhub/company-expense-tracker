@@ -29,7 +29,8 @@ use Illuminate\Support\Str;
 use LogicException;
 
 /**
- * A recurring service the company pays by card.
+ * A recurring service the company pays by card, bank transfer / PromptPay or
+ * direct debit (see PaymentMethod). `credit_card_id` is only set for card methods.
  *
  * - `estimated_amount` is the expected amount (minor units of `currency`).
  *   Actual charged amounts are SubscriptionCharge rows, created only by
@@ -61,10 +62,11 @@ use LogicException;
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
  * @property-read User $responsible
- * @property-read CreditCard $creditCard
+ * @property-read CreditCard|null $creditCard
+ * @property-read PaymentMethod|null $paymentMethod
  */
 #[Fillable([
-    'name', 'vendor', 'category', 'responsible_user_id', 'credit_card_id', 'billing_cycle',
+    'name', 'vendor', 'category', 'responsible_user_id', 'credit_card_id', 'payment_method_id', 'billing_cycle',
     'billing_day', 'next_charge_date', 'currency', 'estimated_amount', 'remind_days_before', 'notes',
 ])]
 class Subscription extends Model
@@ -185,7 +187,7 @@ class Subscription extends Model
      */
     public function needsNewCard(): bool
     {
-        return ! $this->isCancelled() && ! $this->creditCard->isActive();
+        return ! $this->isCancelled() && $this->creditCard !== null && ! $this->creditCard->isActive();
     }
 
     /**
@@ -256,7 +258,7 @@ class Subscription extends Model
         $vendorKey = self::normalize($vendor);
 
         return self::query()
-            ->with('creditCard')
+            ->with('paymentMethod')
             ->where('status', '!=', SubscriptionStatus::Cancelled->value)
             ->when($ignoreId !== null, fn (Builder $query) => $query->whereKeyNot($ignoreId))
             ->orderBy('name')

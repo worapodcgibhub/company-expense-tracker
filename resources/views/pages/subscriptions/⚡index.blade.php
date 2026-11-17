@@ -272,7 +272,11 @@ new #[Title('Subscription')] class extends Component {
                                 </p>
                                 <p class="truncate text-sm text-slate-500">{{ $subscription->vendor }} · {{ $subscription->category->label() }}</p>
                                 <p class="mt-0.5 text-sm text-slate-600">
-                                    <span class="font-mono tracking-wider">{{ $subscription->creditCard->maskedNumber() }}</span>
+                                    @if ($subscription->creditCard)
+                                        <span class="font-mono tracking-wider">{{ $subscription->creditCard->maskedNumber() }}</span>
+                                    @else
+                                        <span>{{ $subscription->paymentMethod?->name ?? '–' }}</span>
+                                    @endif
                                     <span class="text-slate-400">·</span>
                                     ผู้รับผิดชอบ {{ $subscription->responsible->name }}
                                 </p>

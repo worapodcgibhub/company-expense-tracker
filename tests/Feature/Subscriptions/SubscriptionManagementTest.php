@@ -36,7 +36,7 @@ function fillSubscriptionForm(Testable $component, array $overrides = []): Testa
         'vendor' => 'Adobe Inc.',
         'category' => 'design',
         'responsible_user_id' => (string) test()->owner->id,
-        'credit_card_id' => (string) test()->card->id,
+        'payment_method_id' => (string) test()->card->paymentMethod->id,
         'billing_cycle' => 'monthly',
         'next_charge_date' => '2026-11-20',
         'currency' => 'THB',
@@ -200,7 +200,7 @@ test('required fields are validated', function () {
     ownerForm()
         ->set('responsible_user_id', '')
         ->call('save')
-        ->assertHasErrors(['name' => 'required', 'vendor' => 'required', 'responsible_user_id' => 'required', 'credit_card_id' => 'required', 'next_charge_date' => 'required', 'billing_day' => 'required', 'amount' => 'required']);
+        ->assertHasErrors(['name' => 'required', 'vendor' => 'required', 'responsible_user_id' => 'required', 'payment_method_id' => 'required', 'next_charge_date' => 'required', 'billing_day' => 'required', 'amount' => 'required']);
 
     expect(Subscription::count())->toBe(0);
 });
@@ -228,9 +228,9 @@ test('the date must fall on the chosen billing day', function () {
 test('a deactivated card cannot be used for a new subscription', function () {
     $closed = CreditCard::factory()->deactivated()->create();
 
-    fillSubscriptionForm(ownerForm(), ['credit_card_id' => (string) $closed->id])
+    fillSubscriptionForm(ownerForm(), ['payment_method_id' => (string) $closed->paymentMethod->id])
         ->call('save')
-        ->assertHasErrors(['credit_card_id']);
+        ->assertHasErrors(['payment_method_id']);
 
     expect(Subscription::count())->toBe(0);
 });
@@ -239,9 +239,9 @@ test('an existing subscription cannot be switched to a deactivated card', functi
     $subscription = Subscription::factory()->create();
     $closed = CreditCard::factory()->deactivated()->create();
 
-    ownerForm($subscription)->set('credit_card_id', (string) $closed->id)->call('save')->assertHasErrors(['credit_card_id']);
+    ownerForm($subscription)->set('payment_method_id', (string) $closed->paymentMethod->id)->call('save')->assertHasErrors(['payment_method_id']);
 
-    expect($subscription->fresh()->credit_card_id)->not->toBe($closed->id);
+    expect($subscription->fresh()->payment_method_id)->not->toBe($closed->paymentMethod->id);
 });
 
 test('deactivated cards are not offered for a new subscription', function () {
@@ -260,8 +260,8 @@ test('the responsible person must be an active user', function () {
 
 test('unknown enum values and ids are rejected', function () {
     fillSubscriptionForm(ownerForm(), [
-        'category' => 'gaming', 'billing_cycle' => 'weekly', 'currency' => 'EUR', 'credit_card_id' => '99999', 'remind_days_before' => '31',
-    ])->call('save')->assertHasErrors(['category', 'billing_cycle', 'currency', 'credit_card_id', 'remind_days_before']);
+        'category' => 'gaming', 'billing_cycle' => 'weekly', 'currency' => 'EUR', 'payment_method_id' => '99999', 'remind_days_before' => '31',
+    ])->call('save')->assertHasErrors(['category', 'billing_cycle', 'currency', 'payment_method_id', 'remind_days_before']);
 });
 
 test('full card numbers are rejected in the name and notes', function (string $field) {

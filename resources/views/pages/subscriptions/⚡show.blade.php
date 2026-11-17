@@ -193,7 +193,7 @@ new #[Title('Subscription')] class extends Component {
             }
         }]], [], ['resume_date' => 'วันตัดบัตรครั้งถัดไป']);
 
-        if (! $subscription->creditCard->isActive()) {
+        if ($subscription->needsNewCard()) {
             $this->addError('resume_date', 'บัตรที่ผูกไว้ถูกปิดใช้งานแล้ว กรุณาแก้ไขให้ใช้บัตรที่ยังใช้งานอยู่ก่อน');
 
             return;
@@ -318,12 +318,22 @@ new #[Title('Subscription')] class extends Component {
                     </dd>
                 </div>
                 <div>
-                    <dt class="text-sm text-slate-500">บัตรที่ใช้ชำระ</dt>
+                    <dt class="text-sm text-slate-500">{{ $s->creditCard ? 'บัตรที่ใช้ชำระ' : 'ช่องทางชำระเงิน' }}</dt>
                     <dd class="mt-0.5 text-slate-900">
-                        {{ $s->creditCard->name }} <span class="font-mono tracking-wider">{{ $s->creditCard->maskedNumber() }}</span>
-                        @unless ($s->creditCard->isActive())
-                            <x-ui.status-badge tone="red" :dot="false">ปิดใช้งาน</x-ui.status-badge>
-                        @endunless
+                        @if ($s->creditCard)
+                            {{ $s->creditCard->name }} <span class="font-mono tracking-wider">{{ $s->creditCard->maskedNumber() }}</span>
+                            @unless ($s->creditCard->isActive())
+                                <x-ui.status-badge tone="red" :dot="false">ปิดใช้งาน</x-ui.status-badge>
+                            @endunless
+                        @elseif ($s->paymentMethod)
+                            {{ $s->paymentMethod->name }}
+                            @if ($s->paymentMethod->bankAccount)
+                                <span class="font-mono tracking-wider">{{ $s->paymentMethod->bankAccount->maskedNumber() }}</span>
+                            @endif
+                            <span class="text-xs text-slate-500">({{ $s->paymentMethod->settlement->label() }})</span>
+                        @else
+                            –
+                        @endif
                     </dd>
                 </div>
                 <div>
@@ -368,7 +378,9 @@ new #[Title('Subscription')] class extends Component {
         <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <x-ui.section-header title="ประวัติการตัดเงินจริง" description="ยอดที่บัตรถูกตัดจริงในแต่ละรอบ" icon="receipt-percent" class="!mb-0" />
             @can('create', [\App\Models\SubscriptionCharge::class, $s])
-                @if ($s->canRecordChargeOn())
+                @if ($s->credit_card_id === null)
+                    <flux:text class="text-xs" data-test="record-charge-not-yet">การบันทึกยอดของช่องทางที่ไม่ใช่บัตรจะเปิดให้ใช้ในขั้นถัดไป</flux:text>
+                @elseif ($s->canRecordChargeOn())
                     <flux:button icon="plus" variant="primary" size="sm" :href="route('charges.create', $s)" wire:navigate data-test="record-charge-button">
                         บันทึกยอดตัดจริง (รอบ {{ ThaiFormat::date($s->next_charge_date) }})
                     </flux:button>

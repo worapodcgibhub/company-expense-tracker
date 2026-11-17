@@ -3,8 +3,9 @@
 use App\Enums\BillingCycle;
 use App\Enums\Currency;
 use App\Enums\SubscriptionCategory;
+use App\Enums\PaymentMethodType;
 use App\Enums\SubscriptionStatus;
-use App\Models\CreditCard;
+use App\Models\PaymentMethod;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Rules\NoFullCardNumber;
@@ -42,7 +43,7 @@ new #[Title('Subscription')] class extends Component {
     public string $vendor = '';
     public string $category = 'software';
     public string $responsible_user_id = '';
-    public string $credit_card_id = '';
+    public string $payment_method_id = '';
     public string $billing_cycle = 'monthly';
     public string $next_charge_date = '';
     public string $billing_day = '';
@@ -77,7 +78,7 @@ new #[Title('Subscription')] class extends Component {
         $this->vendor = $subscription->vendor;
         $this->category = $subscription->category->value;
         $this->responsible_user_id = (string) $subscription->responsible_user_id;
-        $this->credit_card_id = (string) $subscription->credit_card_id;
+        $this->payment_method_id = (string) $subscription->payment_method_id;
         $this->billing_cycle = $subscription->billing_cycle->value;
         $this->next_charge_date = $subscription->next_charge_date->format('Y-m-d');
         $this->billing_day = (string) $subscription->billing_day;
@@ -90,25 +91,58 @@ new #[Title('Subscription')] class extends Component {
     #[Computed]
     public function editing(): ?Subscription
     {
-        return $this->subscriptionId !== null ? Subscription::with(['creditCard', 'responsible'])->findOrFail($this->subscriptionId) : null;
+        return $this->subscriptionId !== null ? Subscription::with(['paymentMethod.creditCard', 'paymentMethod.bankAccount', 'responsible'])->findOrFail($this->subscriptionId) : null;
     }
 
     /**
-     * Active cards, plus the current one if it has been deactivated since.
+     * Payment methods that can be chosen: active, with their card / bank
+     * account active too, and not cash (recurring costs are paid by card,
+     * transfer / PromptPay or direct debit). The current one is always kept
+     * in the list, even if it has been switched off since.
      *
-     * @return Collection<int, CreditCard>
+     * @return Collection<int, PaymentMethod>
      */
     #[Computed]
-    public function cards(): Collection
+    public function methods(): Collection
     {
-        return CreditCard::query()
-            ->where(fn ($query) => $query
-                ->where(fn ($usable) => $usable
-                    ->whereNull('deactivated_at')
-                    ->whereHas('paymentMethod', fn ($method) => $method->whereNull('deactivated_at')))
-                ->orWhere('id', $this->editing?->credit_card_id))
+        $currentId = $this->editing?->payment_method_id;
+
+        return PaymentMethod::query()
+            ->with(['creditCard', 'bankAccount'])
             ->orderBy('name')
-            ->get();
+            ->get()
+            ->filter(fn (PaymentMethod $method) => $method->id === $currentId || $this->isChoosable($method))
+            ->values();
+    }
+
+    /**
+     * What the person has picked, to explain Auto / Manual under the field.
+     */
+    #[Computed]
+    public function selectedMethod(): ?PaymentMethod
+    {
+        return ctype_digit($this->payment_method_id)
+            ? $this->methods->firstWhere('id', (int) $this->payment_method_id)
+            : null;
+    }
+
+    private function isChoosable(PaymentMethod $method): bool
+    {
+        return $method->isUsable()
+            && $method->hasValidTarget()
+            && $method->type !== PaymentMethodType::Cash;
+    }
+
+    /**
+     * "บัตร ••••4242" / "บัญชี ••••5678" / "" (what stands behind a method).
+     */
+    public function targetLabel(PaymentMethod $method): string
+    {
+        return match (true) {
+            $method->creditCard !== null => $method->creditCard->maskedNumber(),
+            $method->bankAccount !== null => $method->bankAccount->maskedNumber(),
+            default => '',
+        };
     }
 
     /**
@@ -195,23 +229,22 @@ new #[Title('Subscription')] class extends Component {
                     $fail('ผู้รับผิดชอบต้องเป็นบัญชีที่ยังใช้งานอยู่');
                 }
             }],
-            'credit_card_id' => ['required', 'integer', Rule::exists('credit_cards', 'id'), function ($attribute, $value, $fail) use ($editing) {
-                if ((int) $value === $editing?->credit_card_id) {
+            'payment_method_id' => ['required', 'integer', Rule::exists('payment_methods', 'id'), function ($attribute, $value, $fail) use ($editing) {
+                // Keeping the method the subscription already has is always allowed.
+                if ((int) $value === $editing?->payment_method_id) {
                     return;
                 }
 
-                $card = CreditCard::with('paymentMethod.creditCard')->find((int) $value);
+                $method = PaymentMethod::with(['creditCard', 'bankAccount'])->find((int) $value);
 
-                if ($card === null) {
+                if ($method === null) {
                     return;
                 }
 
-                if (! $card->isActive()) {
-                    $fail('บัตรนี้ถูกปิดใช้งานแล้ว เลือกบัตรที่ยังใช้งานอยู่');
-                } elseif ($card->paymentMethod === null) {
-                    $fail('บัตรนี้ยังไม่มีช่องทางชำระเงิน เลือกบัตรอื่น หรือตั้งค่าช่องทางชำระเงินของบัตรก่อน');
-                } elseif (! $card->paymentMethod->isUsable()) {
-                    $fail('ช่องทางชำระเงินของบัตรนี้ถูกปิดใช้งานอยู่ เลือกบัตรอื่น หรือเปิดใช้งานช่องทางนั้นก่อน');
+                if (! $method->isUsable()) {
+                    $fail('ช่องทางชำระเงินนี้ (หรือบัตร/บัญชีธนาคารของช่องทางนี้) ถูกปิดใช้งานแล้ว เลือกช่องทางที่ยังใช้งานอยู่');
+                } elseif (! $method->hasValidTarget() || $method->type === PaymentMethodType::Cash) {
+                    $fail('ช่องทางชำระเงินนี้ใช้กับ Subscription ไม่ได้ เลือกบัตร โอนธนาคาร PromptPay/QR หรือหักบัญชีอัตโนมัติ');
                 }
             }],
             'billing_cycle' => ['required', Rule::enum(BillingCycle::class)],
@@ -251,7 +284,7 @@ new #[Title('Subscription')] class extends Component {
             'vendor' => 'ผู้ให้บริการ',
             'category' => 'หมวดหมู่',
             'responsible_user_id' => 'ผู้รับผิดชอบ',
-            'credit_card_id' => 'บัตรที่ใช้ชำระ',
+            'payment_method_id' => 'ช่องทางชำระเงิน',
             'billing_cycle' => 'รอบบิล',
             'billing_day' => 'วันตัดตามรอบ',
             'next_charge_date' => 'วันตัดบัตรครั้งถัดไป',
@@ -268,21 +301,24 @@ new #[Title('Subscription')] class extends Component {
             $this->warnedFingerprint = $fingerprint;
             $this->duplicateWarnings = $duplicates->map(fn (Subscription $s) => [
                 'name' => $s->name,
-                'detail' => "{$s->vendor} · {$s->amountLabel()} · {$s->creditCard->maskedNumber()} · {$s->status->label()}",
+                'detail' => "{$s->vendor} · {$s->amountLabel()} · ".($s->paymentMethod?->name ?? 'ไม่ระบุช่องทางชำระเงิน')." · {$s->status->label()}",
             ])->all();
 
             return;
         }
 
         $subscription = $editing ?? new Subscription;
+        $method = PaymentMethod::findOrFail((int) $validated['payment_method_id']);
 
-        DB::transaction(function () use ($subscription, $validated, $editing) {
+        DB::transaction(function () use ($subscription, $validated, $editing, $method) {
             $subscription->fill([
                 'name' => $validated['name'],
                 'vendor' => $validated['vendor'],
                 'category' => SubscriptionCategory::from($validated['category']),
                 'responsible_user_id' => (int) $validated['responsible_user_id'],
-                'credit_card_id' => (int) $validated['credit_card_id'],
+                // The card is only set for card methods; its history (charges) is never touched here.
+                'payment_method_id' => $method->id,
+                'credit_card_id' => $method->credit_card_id,
                 'billing_cycle' => BillingCycle::from($validated['billing_cycle']),
                 'billing_day' => (int) $validated['billing_day'],
                 'next_charge_date' => CarbonImmutable::createFromFormat('!Y-m-d', $validated['next_charge_date']),
@@ -392,20 +428,34 @@ new #[Title('Subscription')] class extends Component {
             <x-ui.section-header title="รอบบิลและการชำระเงิน" icon="credit-card" />
             <div class="grid gap-4 sm:grid-cols-2">
                 <div class="sm:col-span-2">
-                    <flux:select wire:model="credit_card_id" label="บัตรที่ใช้ชำระ">
-                        <flux:select.option value="">เลือกบัตร</flux:select.option>
-                        @foreach ($this->cards as $option)
-                            <flux:select.option value="{{ $option->id }}">{{ $option->name }} · {{ $option->issuer }} · {{ $option->maskedNumber() }}{{ $option->isActive() ? '' : ' (ปิดใช้งาน)' }}</flux:select.option>
+                    <flux:select wire:model.live="payment_method_id" label="ช่องทางชำระเงิน">
+                        <flux:select.option value="">เลือกช่องทางชำระเงิน</flux:select.option>
+                        @foreach ($this->methods as $option)
+                            <flux:select.option value="{{ $option->id }}">{{ $option->name }} · {{ $option->type->label() }}{{ $this->targetLabel($option) !== '' ? ' · '.$this->targetLabel($option) : '' }} · {{ $option->settlement->label() }}{{ $option->isUsable() ? '' : ' (ปิดใช้งาน)' }}</flux:select.option>
                         @endforeach
                     </flux:select>
-                    @if ($editing && ! $editing->creditCard->isActive())
-                        <flux:text class="mt-1 text-xs !text-red-700" data-test="card-deactivated-warning">บัตรเดิมถูกปิดใช้งานแล้ว การตัดเงินอาจไม่ผ่าน ควรเปลี่ยนเป็นบัตรที่ยังใช้งานอยู่</flux:text>
+
+                    @if ($this->selectedMethod)
+                        <flux:text class="mt-1 text-xs" data-test="settlement-hint">
+                            @if ($this->selectedMethod->isAuto())
+                                <strong>Auto</strong> · ธนาคารตัดเงินให้เอง หลังตัดแล้วให้บันทึกยอดที่ตัดจริงในระบบ
+                            @else
+                                <strong>Manual</strong> · ต้องมีคนโอน/จ่ายเอง แล้วยืนยันการชำระเงินในระบบ
+                            @endif
+                        </flux:text>
+                    @endif
+
+                    @if ($editing && $editing->needsNewCard())
+                        <flux:text class="mt-1 text-xs !text-red-700" data-test="card-deactivated-warning">บัตรเดิมถูกปิดใช้งานแล้ว การตัดเงินอาจไม่ผ่าน ควรเปลี่ยนเป็นช่องทางที่ยังใช้งานอยู่</flux:text>
                     @endif
                     @if ($editing && $editing->needsNewPaymentMethod())
-                        <flux:text class="mt-1 text-xs !text-red-700" data-test="method-deactivated-warning">ช่องทางชำระเงินของบัตรเดิมถูกปิดใช้งานแล้ว การชำระอาจไม่ผ่าน ควรเปลี่ยนเป็นบัตรที่ช่องทางยังใช้งานอยู่ หรือให้เจ้าของบริษัทเปิดใช้งานช่องทางนั้นอีกครั้ง</flux:text>
+                        <flux:text class="mt-1 text-xs !text-red-700" data-test="method-deactivated-warning">ช่องทางชำระเงินเดิม (หรือบัตร/บัญชีธนาคารของช่องทางนี้) ถูกปิดใช้งานแล้ว การชำระอาจไม่ผ่าน ควรเปลี่ยนเป็นช่องทางที่ยังใช้งานอยู่ หรือให้เจ้าของบริษัทเปิดใช้งานอีกครั้ง</flux:text>
                     @endif
-                    @if ($this->cards->isEmpty())
-                        <flux:text class="mt-1 text-xs">ยังไม่มีบัตรที่ใช้งานอยู่ <a href="{{ route('credit-cards.index') }}" class="underline" wire:navigate>เพิ่มบัตรก่อน</a></flux:text>
+                    @if ($this->methods->isEmpty())
+                        <flux:text class="mt-1 text-xs">ยังไม่มีช่องทางชำระเงินที่ใช้งานอยู่ <a href="{{ route('payment-methods.index') }}" class="underline" wire:navigate>เพิ่มช่องทางก่อน</a></flux:text>
+                    @endif
+                    @if ($editing && $editing->charges()->exists())
+                        <flux:text class="mt-1 text-xs" data-test="history-note">การเปลี่ยนช่องทางมีผลกับรอบถัดไปเท่านั้น ประวัติการตัดเงินที่บันทึกไว้แล้วจะไม่เปลี่ยน</flux:text>
                     @endif
                 </div>
 
