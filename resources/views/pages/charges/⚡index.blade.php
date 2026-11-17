@@ -69,12 +69,14 @@ new #[Title('รายการตัดเงิน')] class extends Component 
             ->visibleTo(auth()->user())
             ->when($period !== null, function (Builder $query) use ($period) {
                 // A month shows what was charged in it, plus skipped cycles due in it.
+                // Half-open range: stored dates may carry a time, so the last
+                // day of the month must not be the upper bound.
                 $start = AccountingPeriodClosure::startOf((string) $period);
-                $range = [$start->format('Y-m-d'), $start->endOfMonth()->format('Y-m-d')];
+                [$from, $until] = [$start->format('Y-m-d'), $start->addMonth()->format('Y-m-d')];
 
                 $query->where(fn (Builder $query) => $query
-                    ->whereBetween('charged_on', $range)
-                    ->orWhere(fn (Builder $query) => $query->whereNull('charged_on')->whereBetween('due_date', $range)));
+                    ->where(fn (Builder $query) => $query->where('charged_on', '>=', $from)->where('charged_on', '<', $until))
+                    ->orWhere(fn (Builder $query) => $query->whereNull('charged_on')->where('due_date', '>=', $from)->where('due_date', '<', $until)));
             })
             ->when($this->canFilterByCard() && ctype_digit($this->card), fn (Builder $query) => $query->where('credit_card_id', (int) $this->card))
             ->when($category !== null, fn (Builder $query) => $query->whereIn('subscription_id', Subscription::query()->select('id')->where('category', $category?->value)))

@@ -603,6 +603,10 @@ class SubscriptionCharge extends Model
     /**
      * Charged in the calendar month of $month.
      *
+     * Half-open range (first day inclusive, first day of the next month
+     * exclusive): stored dates may carry a time ("2026-10-31 00:00:00"),
+     * which a BETWEEN up to "2026-10-31" would leave out.
+     *
      * @param  Builder<SubscriptionCharge>  $query
      */
     #[Scope]
@@ -611,6 +615,7 @@ class SubscriptionCharge extends Model
         $start = CarbonImmutable::instance($month)->startOfMonth();
 
         $query->where('outcome', ChargeOutcome::Charged->value)
-            ->whereBetween('charged_on', [$start->format('Y-m-d'), $start->endOfMonth()->format('Y-m-d')]);
+            ->where('charged_on', '>=', $start->format('Y-m-d'))
+            ->where('charged_on', '<', $start->addMonth()->format('Y-m-d'));
     }
 }
