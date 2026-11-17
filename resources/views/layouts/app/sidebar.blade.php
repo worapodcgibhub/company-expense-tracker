@@ -36,6 +36,12 @@
                             </flux:sidebar.item>
                         @endcan
 
+                        @can('viewAny', \App\Models\BankAccount::class)
+                            <flux:sidebar.item icon="building-library" :href="route('bank-accounts.index')" :current="request()->routeIs('bank-accounts.*')" wire:navigate data-test="bank-accounts-menu">
+                                {{ __('บัญชีธนาคาร') }}
+                            </flux:sidebar.item>
+                        @endcan
+
                         @can('viewAny', \App\Models\AccountingPeriodClosure::class)
                             <flux:sidebar.item icon="lock-closed" :href="route('accounting-periods.index')" :current="request()->routeIs('accounting-periods.*')" wire:navigate data-test="accounting-periods-menu">
                                 {{ __('งวดบัญชี') }}
