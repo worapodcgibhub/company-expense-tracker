@@ -13,6 +13,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
@@ -107,6 +108,14 @@ class CreditCard extends Model
     public static function normalizeIssuer(string $issuer): string
     {
         return Str::lower((string) preg_replace('/\s+/u', '', $issuer));
+    }
+
+    /**
+     * @return HasOne<PaymentMethod, $this>
+     */
+    public function paymentMethod(): HasOne
+    {
+        return $this->hasOne(PaymentMethod::class);
     }
 
     /**
