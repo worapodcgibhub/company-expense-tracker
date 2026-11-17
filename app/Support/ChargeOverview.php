@@ -119,7 +119,7 @@ class ChargeOverview
     {
         return SubscriptionCharge::query()
             ->visibleTo($this->user)
-            ->with(['subscription', 'creditCard'])
+            ->with(['subscription', 'creditCard', 'paymentMethod'])
             ->withCurrentReceiptCount()
             ->latest('id')
             ->limit($limit)

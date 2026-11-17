@@ -37,6 +37,7 @@ class SubscriptionChargeRevision extends Model
         'charged_on' => 'วันที่ตัดเงินจริง',
         'amount' => 'ยอดเงิน',
         'amount_thb' => 'ยอดเงินบาทที่ธนาคารตัด',
+        'payment_method_id' => 'ช่องทางชำระเงิน',
         'credit_card_id' => 'บัตร',
         'notes' => 'หมายเหตุ',
         'verified' => 'การตรวจสอบของฝ่ายบัญชี',
@@ -183,6 +184,7 @@ class SubscriptionChargeRevision extends Model
             'amount' => ThaiFormat::money((int) $value, $currency),
             'amount_thb' => ThaiFormat::money((int) $value, 'THB'),
             'credit_card_id' => isset($cards[(int) $value]) ? $cards[(int) $value]->name.' '.$cards[(int) $value]->maskedNumber() : '#'.$value,
+            'payment_method_id' => PaymentMethod::query()->whereKey((int) $value)->value('name') ?? '#'.$value,
             'verified' => $value ? 'ตรวจสอบแล้ว' : 'ยกเลิก (ต้องตรวจใหม่)',
             default => is_scalar($value) ? (string) $value : '',
         };

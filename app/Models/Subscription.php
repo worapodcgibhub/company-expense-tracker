@@ -349,7 +349,12 @@ class Subscription extends Model
      * cycle must still be the current one, and the unique index on
      * (subscription_id, due_date) is the final safety net.
      *
-     * @param  array{outcome: ChargeOutcome, charged_on: ?DateTimeInterface, amount: int, amount_thb: ?int, credit_card_id: int, notes: ?string}  $values
+     * The payment method actually used goes in `payment_method_id` (or, as
+     * before, only `credit_card_id`); see SubscriptionCharge::normalizeValues().
+     * `recorded_by` ($by) is who recorded the Auto charge or confirmed the
+     * Manual payment.
+     *
+     * @param  array{outcome: ChargeOutcome, charged_on: ?DateTimeInterface, amount: int, amount_thb: ?int, payment_method_id?: int|null, credit_card_id?: int|null, notes: ?string}  $values
      *
      * @throws ChargeConflictException
      */

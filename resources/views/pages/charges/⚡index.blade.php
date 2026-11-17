@@ -93,7 +93,7 @@ new #[Title('รายการตัดเงิน')] class extends Component 
     public function charges(): Collection
     {
         return $this->query()
-            ->with(['subscription', 'creditCard'])
+            ->with(['subscription', 'creditCard', 'paymentMethod'])
             ->withCurrentReceiptCount()
             ->orderByRaw('coalesce(charged_on, due_date) desc')
             ->orderByDesc('id')
@@ -249,8 +249,16 @@ new #[Title('รายการตัดเงิน')] class extends Component 
                             <div class="min-w-0">
                                 <p class="truncate font-medium text-slate-900">{{ $charge->subscription->name }}</p>
                                 <p class="text-sm text-slate-500">
-                                    {{ $charge->charged_on ? 'ตัดเงิน '.ThaiFormat::date($charge->charged_on) : 'รอบ '.ThaiFormat::date($charge->due_date) }}
-                                    · <span class="font-mono tracking-wider">{{ $charge->creditCard->maskedNumber() }}</span>
+                                    @php $manualCharge = $charge->paymentMethod !== null && ! $charge->paymentMethod->isAuto(); @endphp
+                                    {{ $charge->charged_on ? ($manualCharge ? 'ชำระ ' : 'ตัดเงิน ').ThaiFormat::date($charge->charged_on) : 'รอบ '.ThaiFormat::date($charge->due_date) }}
+                                    @if ($charge->creditCard)
+                                        · <span class="font-mono tracking-wider">{{ $charge->creditCard->maskedNumber() }}</span>
+                                    @elseif ($charge->paymentMethod)
+                                        · <span data-test="charge-method">{{ $charge->paymentMethod->name }}</span>
+                                    @endif
+                                    @if ($charge->paymentMethod)
+                                        · {{ $charge->paymentMethod->isAuto() ? 'Auto' : 'Manual' }}
+                                    @endif
                                     · {{ $charge->subscription->category->label() }}
                                 </p>
                             </div>

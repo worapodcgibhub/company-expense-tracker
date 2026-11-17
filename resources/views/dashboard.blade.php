@@ -158,7 +158,7 @@
                                 <a href="{{ route('subscriptions.show', $charge) }}" wire:navigate class="flex items-center justify-between gap-3 py-3 hover:bg-slate-50">
                                     <div class="min-w-0">
                                         <p class="truncate font-medium text-slate-900">{{ $charge->name }}</p>
-                                        <p class="truncate text-xs text-slate-500">{{ $charge->creditCard->maskedNumber() }} · {{ $charge->responsible->name }}</p>
+                                        <p class="truncate text-xs text-slate-500">{{ $charge->creditCard?->maskedNumber() ?? $charge->paymentMethod?->name ?? '–' }} · {{ $charge->responsible->name }}</p>
                                     </div>
                                     <div class="shrink-0 text-end">
                                         <p class="text-sm font-semibold text-slate-900">{{ ThaiFormat::money($charge->estimated_amount, $charge->currency->value) }}</p>
@@ -262,7 +262,7 @@
                                     <p class="truncate font-medium text-slate-900">{{ $expense->subscription->name }}</p>
                                     <p class="truncate text-xs text-slate-500">
                                         {{ $expense->charged_on ? ThaiFormat::date($expense->charged_on) : 'รอบ '.ThaiFormat::date($expense->due_date) }}
-                                        · {{ $expense->creditCard->maskedNumber() }}
+                                        · {{ $expense->creditCard?->maskedNumber() ?? $expense->paymentMethod?->name ?? '–' }}
                                     </p>
                                 </div>
                                 <div class="flex flex-col gap-1 sm:items-end">

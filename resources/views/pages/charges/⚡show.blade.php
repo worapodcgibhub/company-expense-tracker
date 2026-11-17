@@ -69,7 +69,7 @@ new #[Title('รายการตัดเงิน')] class extends Component 
     #[Computed]
     public function charge(): SubscriptionCharge
     {
-        return SubscriptionCharge::with(['subscription', 'creditCard', 'recorder', 'updater', 'verifier'])->findOrFail($this->chargeId);
+        return SubscriptionCharge::with(['subscription', 'creditCard', 'paymentMethod.bankAccount', 'recorder', 'updater', 'verifier'])->findOrFail($this->chargeId);
     }
 
     /**
@@ -464,15 +464,30 @@ new #[Title('รายการตัดเงิน')] class extends Component 
                 </div>
             @endif
             <div>
-                <dt class="text-sm text-slate-500">วันที่ตัดเงินจริง</dt>
+                <dt class="text-sm text-slate-500">{{ $c->paymentMethod !== null && ! $c->paymentMethod->isAuto() ? 'วันที่ชำระจริง' : 'วันที่ตัดเงินจริง' }}</dt>
                 <dd class="mt-0.5 text-slate-900">{{ $c->charged_on ? ThaiFormat::date($c->charged_on) : '–' }}</dd>
             </div>
+            @php $paidManually = $c->paymentMethod !== null && ! $c->paymentMethod->isAuto(); @endphp
             <div>
-                <dt class="text-sm text-slate-500">บัตรที่ถูกตัด</dt>
-                <dd class="mt-0.5 text-slate-900">{{ $c->creditCard->name }} <span class="font-mono tracking-wider">{{ $c->creditCard->maskedNumber() }}</span></dd>
+                <dt class="text-sm text-slate-500">ช่องทางที่ใช้ชำระจริง</dt>
+                <dd class="mt-0.5 text-slate-900" data-test="charge-method">
+                    @if ($c->creditCard)
+                        {{ $c->creditCard->name }} <span class="font-mono tracking-wider">{{ $c->creditCard->maskedNumber() }}</span>
+                    @elseif ($c->paymentMethod)
+                        {{ $c->paymentMethod->name }}
+                        @if ($c->paymentMethod->bankAccount)
+                            <span class="font-mono tracking-wider">{{ $c->paymentMethod->bankAccount->maskedNumber() }}</span>
+                        @endif
+                    @else
+                        –
+                    @endif
+                    @if ($c->paymentMethod)
+                        <span class="text-xs text-slate-500">({{ $c->paymentMethod->isAuto() ? 'Auto' : 'Manual' }})</span>
+                    @endif
+                </dd>
             </div>
             <div>
-                <dt class="text-sm text-slate-500">บันทึกโดย</dt>
+                <dt class="text-sm text-slate-500">{{ $paidManually && $c->isCharged() ? 'ยืนยันการชำระโดย' : 'บันทึกโดย' }}</dt>
                 <dd class="mt-0.5 text-slate-900" data-test="recorded-by">
                     {{ $c->recorder?->name ?? '–' }} · {{ ThaiFormat::date($c->created_at) }} {{ $c->created_at?->format('H:i') }}
                 </dd>

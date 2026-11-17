@@ -111,16 +111,17 @@ test('several fields changed at once are all recorded', function () {
 
     editForm($charge)
         ->set('charged_on', '2026-11-13')
-        ->set('credit_card_id', (string) $otherCard->id)
+        ->set('payment_method_id', (string) $otherCard->paymentMethod->id)
         ->set('notes', 'ตัดจากบัตรสำรอง')
         ->set('reason', 'บันทึกบัตรผิด')
         ->call('save')
         ->assertHasNoErrors();
 
     $changes = $charge->revisions()->latest('id')->first()->diff;
-    expect(array_keys($changes))->toBe(['charged_on', 'credit_card_id', 'notes'])
+    expect(array_keys($changes))->toBe(['charged_on', 'payment_method_id', 'credit_card_id', 'notes'])
         ->and($changes['charged_on'])->toBe(['2026-11-14', '2026-11-13'])
-        ->and($changes['credit_card_id'])->toBe([$charge->credit_card_id, $otherCard->id]);
+        ->and($changes['credit_card_id'])->toBe([$charge->credit_card_id, $otherCard->id])
+        ->and($changes['payment_method_id'])->toBe([$charge->payment_method_id, $otherCard->paymentMethod->id]);
 });
 
 test('correcting a charge never moves the due date or the next charge date', function () {

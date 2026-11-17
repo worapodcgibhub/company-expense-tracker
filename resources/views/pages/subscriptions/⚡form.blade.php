@@ -257,9 +257,9 @@ new #[Title('Subscription')] class extends Component {
                 }
 
                 if ($dateChanged && $date->lessThan($today)) {
-                    $fail('วันตัดบัตรครั้งถัดไปต้องเป็นวันนี้หรือหลังจากนี้');
+                    $fail('กำหนดชำระครั้งถัดไปต้องเป็นวันนี้หรือหลังจากนี้');
                 } elseif ($date->greaterThan($today->addYears(2))) {
-                    $fail('วันตัดบัตรครั้งถัดไปต้องไม่เกิน 2 ปีจากวันนี้');
+                    $fail('กำหนดชำระครั้งถัดไปต้องไม่เกิน 2 ปีจากวันนี้');
                 } elseif (ctype_digit($this->billing_day) && ! BillingSchedule::matchesBillingDay($date, (int) $this->billing_day)) {
                     $fail('วันที่นี้ไม่ตรงกับ "วันตัดตามรอบ" ที่เลือกไว้');
                 }
@@ -287,7 +287,7 @@ new #[Title('Subscription')] class extends Component {
             'payment_method_id' => 'ช่องทางชำระเงิน',
             'billing_cycle' => 'รอบบิล',
             'billing_day' => 'วันตัดตามรอบ',
-            'next_charge_date' => 'วันตัดบัตรครั้งถัดไป',
+            'next_charge_date' => 'กำหนดชำระครั้งถัดไป',
             'currency' => 'สกุลเงิน',
             'amount' => 'ยอดประมาณการ',
             'remind_days_before' => 'แจ้งเตือนล่วงหน้า',
@@ -465,7 +465,7 @@ new #[Title('Subscription')] class extends Component {
                     @endforeach
                 </flux:select>
 
-                <flux:input type="date" wire:model.live="next_charge_date" label="วันตัดบัตรครั้งถัดไป" required />
+                <flux:input type="date" wire:model.live="next_charge_date" label="กำหนดชำระครั้งถัดไป" required />
 
                 <div class="sm:col-span-2">
                     <flux:select wire:model.live="billing_day" label="วันตัดตามรอบ" description="ถ้าเดือนนั้นมีไม่ถึงวันที่เลือก ระบบจะใช้วันสุดท้ายของเดือน">

@@ -63,7 +63,7 @@ new #[Title('Subscription')] class extends Component {
     #[Computed]
     public function charges(): Collection
     {
-        return $this->subscription->charges()->with('recorder')->withCurrentReceiptCount()->orderByDesc('due_date')->get();
+        return $this->subscription->charges()->with(['recorder', 'paymentMethod'])->withCurrentReceiptCount()->orderByDesc('due_date')->get();
     }
 
     /**
@@ -185,13 +185,13 @@ new #[Title('Subscription')] class extends Component {
             }
 
             if ($date->lessThan($today)) {
-                $fail('วันตัดบัตรครั้งถัดไปต้องเป็นวันนี้หรือหลังจากนี้');
+                $fail('กำหนดชำระครั้งถัดไปต้องเป็นวันนี้หรือหลังจากนี้');
             } elseif ($date->greaterThan($today->addYears(2))) {
-                $fail('วันตัดบัตรครั้งถัดไปต้องไม่เกิน 2 ปีจากวันนี้');
+                $fail('กำหนดชำระครั้งถัดไปต้องไม่เกิน 2 ปีจากวันนี้');
             } elseif (! BillingSchedule::matchesBillingDay($date, $subscription->billing_day)) {
                 $fail('วันที่นี้ไม่ตรงกับวันตัดตามรอบ (ทุกวันที่ '.$subscription->billing_day.') ถ้าวันตัดเปลี่ยน ให้แก้ไขข้อมูล Subscription');
             }
-        }]], [], ['resume_date' => 'วันตัดบัตรครั้งถัดไป']);
+        }]], [], ['resume_date' => 'กำหนดชำระครั้งถัดไป']);
 
         if ($subscription->needsNewCard()) {
             $this->addError('resume_date', 'บัตรที่ผูกไว้ถูกปิดใช้งานแล้ว กรุณาแก้ไขให้ใช้บัตรที่ยังใช้งานอยู่ก่อน');
@@ -305,7 +305,7 @@ new #[Title('Subscription')] class extends Component {
                     <dd class="text-xs text-slate-500">ยอดตัดจริงดูได้ที่ "ประวัติการตัดเงินจริง" ด้านล่าง</dd>
                 </div>
                 <div>
-                    <dt class="text-sm text-slate-500">วันตัดบัตรครั้งถัดไป</dt>
+                    <dt class="text-sm text-slate-500">กำหนดชำระครั้งถัดไป</dt>
                     <dd class="mt-0.5 text-lg font-semibold text-slate-900">{{ ThaiFormat::date($s->next_charge_date) }}</dd>
                     @if ($s->isActive())
                         <dd @class(['text-sm font-medium', 'text-red-600' => $overdue, 'text-slate-500' => ! $overdue])>{{ $s->dueLabel() }}</dd>
@@ -376,13 +376,12 @@ new #[Title('Subscription')] class extends Component {
     {{-- Actual charges (SubscriptionCharge) --}}
     <x-ui.card>
         <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <x-ui.section-header title="ประวัติการตัดเงินจริง" description="ยอดที่บัตรถูกตัดจริงในแต่ละรอบ" icon="receipt-percent" class="!mb-0" />
+            @php $manualPlan = $s->paymentMethod !== null && ! $s->paymentMethod->isAuto(); @endphp
+            <x-ui.section-header title="ประวัติการชำระเงินจริง" description="ยอดที่ตัดหรือจ่ายจริงในแต่ละรอบ" icon="receipt-percent" class="!mb-0" />
             @can('create', [\App\Models\SubscriptionCharge::class, $s])
-                @if ($s->credit_card_id === null)
-                    <flux:text class="text-xs" data-test="record-charge-not-yet">การบันทึกยอดของช่องทางที่ไม่ใช่บัตรจะเปิดให้ใช้ในขั้นถัดไป</flux:text>
-                @elseif ($s->canRecordChargeOn())
+                @if ($s->canRecordChargeOn())
                     <flux:button icon="plus" variant="primary" size="sm" :href="route('charges.create', $s)" wire:navigate data-test="record-charge-button">
-                        บันทึกยอดตัดจริง (รอบ {{ ThaiFormat::date($s->next_charge_date) }})
+                        {{ $manualPlan ? 'ยืนยันการชำระเงิน' : 'บันทึกยอดตัดจริง' }} (รอบ {{ ThaiFormat::date($s->next_charge_date) }})
                     </flux:button>
                 @else
                     <flux:text class="text-xs" data-test="record-charge-later">บันทึกรอบ {{ ThaiFormat::date($s->next_charge_date) }} ได้ตั้งแต่ {{ ThaiFormat::date($s->next_charge_date->subDays(\App\Models\SubscriptionCharge::RECORD_AHEAD_DAYS)) }}</flux:text>
@@ -391,7 +390,7 @@ new #[Title('Subscription')] class extends Component {
         </div>
 
         @if ($this->charges->isEmpty())
-            <x-ui.empty-state icon="receipt-percent" tone="cyan" title="ยังไม่มีการบันทึกยอดตัดจริง" description="เมื่อบัตรถูกตัดเงินแล้ว ให้บันทึกยอดจริงของรอบนั้น ระบบจะเลื่อนวันตัดบัตรครั้งถัดไปให้อัตโนมัติ" compact />
+            <x-ui.empty-state icon="receipt-percent" tone="cyan" title="ยังไม่มีการบันทึกยอดตัดจริง" :description="$manualPlan ? 'เมื่อโอนหรือจ่ายแล้ว ให้กดยืนยันการชำระเงินของรอบนั้น ระบบจะเลื่อนกำหนดชำระครั้งถัดไปให้อัตโนมัติ' : 'เมื่อถูกตัดเงินแล้ว ให้บันทึกยอดจริงของรอบนั้น ระบบจะเลื่อนกำหนดชำระครั้งถัดไปให้อัตโนมัติ'" compact />
         @else
             <ul class="divide-y divide-slate-100" data-test="charge-list">
                 @foreach ($this->charges as $charge)
@@ -400,8 +399,10 @@ new #[Title('Subscription')] class extends Component {
                             <div class="min-w-0 text-sm">
                                 <p class="font-medium text-slate-900">รอบ {{ ThaiFormat::date($charge->due_date) }}</p>
                                 <p class="text-slate-500">
-                                    {{ $charge->charged_on ? 'ตัดเงิน '.ThaiFormat::date($charge->charged_on) : $charge->outcome->label() }}
-                                    · บันทึกโดย {{ $charge->recorder?->name ?? '–' }} {{ ThaiFormat::date($charge->created_at) }}
+                                    @php $paidManually = $charge->paymentMethod !== null && ! $charge->paymentMethod->isAuto(); @endphp
+                                    {{ $charge->charged_on ? ($paidManually ? 'ชำระ ' : 'ตัดเงิน ').ThaiFormat::date($charge->charged_on) : $charge->outcome->label() }}
+                                    · {{ $charge->paymentMethod?->name ?? '–' }}
+                                    · {{ $paidManually && $charge->isCharged() ? 'ยืนยันโดย' : 'บันทึกโดย' }} {{ $charge->recorder?->name ?? '–' }} {{ ThaiFormat::date($charge->created_at) }}
                                 </p>
                             </div>
                             <div class="flex flex-col gap-1 sm:items-end">
@@ -482,9 +483,9 @@ new #[Title('Subscription')] class extends Component {
             <form wire:submit="confirmResume" class="space-y-5">
                 <div>
                     <flux:heading size="lg">กลับมาใช้งาน</flux:heading>
-                    <flux:text class="mt-1">ตรวจวันตัดบัตรครั้งถัดไป ระบบเลือกรอบถัดไปที่ยังไม่ผ่านมาให้แล้ว</flux:text>
+                    <flux:text class="mt-1">ตรวจกำหนดชำระครั้งถัดไป ระบบเลือกรอบถัดไปที่ยังไม่ผ่านมาให้แล้ว</flux:text>
                 </div>
-                <flux:input type="date" wire:model="resume_date" label="วันตัดบัตรครั้งถัดไป" required />
+                <flux:input type="date" wire:model="resume_date" label="กำหนดชำระครั้งถัดไป" required />
                 <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                     <flux:modal.close><flux:button variant="ghost" class="w-full sm:w-auto">ยกเลิก</flux:button></flux:modal.close>
                     <flux:button type="submit" variant="primary" class="w-full sm:w-auto">ยืนยัน</flux:button>

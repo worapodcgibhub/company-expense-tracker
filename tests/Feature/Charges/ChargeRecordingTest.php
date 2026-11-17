@@ -254,7 +254,7 @@ test('a deactivated card can be chosen for a backdated charge', function () {
     $oldCard = CreditCard::factory()->deactivated()->create();
     $subscription = Subscription::factory()->chargingOn(CarbonImmutable::parse('2026-11-14'))->create();
 
-    recordForm($subscription)->set('credit_card_id', (string) $oldCard->id)->call('save')->assertHasNoErrors();
+    recordForm($subscription)->set('payment_method_id', (string) $oldCard->paymentMethod->id)->call('save')->assertHasNoErrors();
 
     expect(SubscriptionCharge::sole()->credit_card_id)->toBe($oldCard->id);
 });

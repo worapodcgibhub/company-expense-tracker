@@ -8,6 +8,7 @@ use App\Enums\Currency;
 use App\Enums\ReceiptKind;
 use App\Enums\ReceiptStatus;
 use App\Exceptions\ChargeConflictException;
+use App\Exceptions\PaymentMethodMismatchException;
 use App\Models\Concerns\ResolvesPaymentMethod;
 use App\Support\ReceiptStorage;
 use App\Support\ThaiFormat;
@@ -40,6 +41,11 @@ use Throwable;
  * - `entered_after_close` is set (and stays set) when the charge was
  *   recorded or changed while its month was a closed accounting period.
  *   The closed period itself is never changed.
+ * - Phase 3.1e-3: `payment_method_id` is how it was really paid (card,
+ *   transfer / PromptPay, direct debit, cash); `credit_card_id` is only set
+ *   for card methods. `recorded_by` is who recorded the Auto charge or
+ *   confirmed the Manual payment. Changing a subscription's method later
+ *   never changes the charges already recorded.
  * - Documents (Phase 2.5): a charge can be recorded without any receipt
  *   and documents attached later (attachReceipt). receiptStatus() tells
  *   "waiting" apart from "no receipt available" (receipt_unavailable_*,
@@ -68,7 +74,8 @@ use Throwable;
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
  * @property-read Subscription $subscription
- * @property-read CreditCard $creditCard
+ * @property-read CreditCard|null $creditCard
+ * @property-read PaymentMethod|null $paymentMethod
  * @property-read User|null $recorder
  * @property-read User|null $updater
  * @property-read User|null $verifier
@@ -97,12 +104,12 @@ class SubscriptionCharge extends Model
      * Fields a person can change after recording (due_date never changes:
      * it identifies the cycle).
      */
-    public const EDITABLE = ['outcome', 'charged_on', 'amount', 'amount_thb', 'credit_card_id', 'notes'];
+    public const EDITABLE = ['outcome', 'charged_on', 'amount', 'amount_thb', 'payment_method_id', 'credit_card_id', 'notes'];
 
     /**
      * Changing any of these takes back the accountant's verification.
      */
-    private const VERIFIED_FIELDS = ['outcome', 'charged_on', 'amount', 'amount_thb', 'credit_card_id'];
+    private const VERIFIED_FIELDS = ['outcome', 'charged_on', 'amount', 'amount_thb', 'payment_method_id', 'credit_card_id'];
 
     /**
      * @var array<string, mixed>
@@ -341,7 +348,7 @@ class SubscriptionCharge extends Model
      * Applies a person's correction and records old → new values.
      * Returns false (and writes nothing) when nothing actually changed.
      *
-     * @param  array{outcome: ChargeOutcome, charged_on: ?DateTimeInterface, amount: int, amount_thb: ?int, credit_card_id: int, notes: ?string}  $values
+     * @param  array{outcome: ChargeOutcome, charged_on: ?DateTimeInterface, amount: int, amount_thb: ?int, payment_method_id?: int|null, credit_card_id?: int|null, notes: ?string}  $values
      *
      * @throws ChargeConflictException when a closed period is involved and not confirmed
      */
@@ -434,28 +441,59 @@ class SubscriptionCharge extends Model
      * Makes the values consistent: a skipped cycle has no date or amount,
      * and only non-THB charges carry a separate baht amount.
      *
-     * @param  array{outcome: ChargeOutcome, charged_on: ?DateTimeInterface, amount: int, amount_thb: ?int, credit_card_id: int, notes: ?string}  $values
-     * @return array{outcome: ChargeOutcome, charged_on: ?CarbonImmutable, amount: int, amount_thb: ?int, credit_card_id: int, notes: ?string}
+     * The payment method is given as `payment_method_id` (its card, if any,
+     * is taken from the method) or, as before Phase 3.1e-3, only as
+     * `credit_card_id` (the card's EXISTING method is used; none is never
+     * created). Both given and not matching -> PaymentMethodMismatchException.
+     *
+     * @param  array{outcome: ChargeOutcome, charged_on: ?DateTimeInterface, amount: int, amount_thb: ?int, payment_method_id?: int|null, credit_card_id?: int|null, notes: ?string}  $values
+     * @return array{outcome: ChargeOutcome, charged_on: ?CarbonImmutable, amount: int, amount_thb: ?int, payment_method_id: int, credit_card_id: int|null, notes: ?string}
      */
     public static function normalizeValues(array $values, Currency $currency): array
     {
         $charged = $values['outcome'] === ChargeOutcome::Charged;
         $notes = $values['notes'] === null || trim($values['notes']) === '' ? null : trim($values['notes']);
+        $method = self::resolveMethod($values['payment_method_id'] ?? null, $values['credit_card_id'] ?? null);
 
         return [
             'outcome' => $values['outcome'],
             'charged_on' => $charged && $values['charged_on'] !== null ? CarbonImmutable::instance($values['charged_on'])->startOfDay() : null,
             'amount' => $charged ? $values['amount'] : 0,
             'amount_thb' => $charged && $currency !== Currency::THB ? $values['amount_thb'] : null,
-            'credit_card_id' => $values['credit_card_id'],
+            'payment_method_id' => $method->id,
+            'credit_card_id' => $method->credit_card_id,
             'notes' => $notes,
         ];
+    }
+
+    private static function resolveMethod(?int $methodId, ?int $cardId): PaymentMethod
+    {
+        if ($methodId !== null) {
+            $method = PaymentMethod::query()->find($methodId);
+
+            if ($method === null) {
+                throw new PaymentMethodMismatchException("ไม่พบช่องทางชำระเงิน (รหัส {$methodId})");
+            }
+
+            if ($cardId !== null && $method->credit_card_id !== $cardId) {
+                throw new PaymentMethodMismatchException("ช่องทางชำระเงิน (รหัส {$methodId}) ไม่ตรงกับบัตร (รหัส {$cardId})");
+            }
+
+            return $method;
+        }
+
+        if ($cardId === null) {
+            throw new LogicException('A charge needs a payment method.');
+        }
+
+        return PaymentMethod::query()->where('credit_card_id', $cardId)->first()
+            ?? throw new PaymentMethodMismatchException("ไม่พบช่องทางชำระเงินของบัตร (รหัส {$cardId}) กรุณาตั้งค่าช่องทางชำระเงินของบัตรนี้ก่อน");
     }
 
     /**
      * Plain values (as stored) for the revision history.
      *
-     * @param  array{outcome: ChargeOutcome, charged_on: ?CarbonImmutable, amount: int, amount_thb: ?int, credit_card_id: int, notes: ?string}  $values
+     * @param  array{outcome: ChargeOutcome, charged_on: ?CarbonImmutable, amount: int, amount_thb: ?int, payment_method_id: int, credit_card_id: int|null, notes: ?string}  $values
      * @return array<string, string|int|null>
      */
     public static function storable(array $values): array
@@ -465,6 +503,7 @@ class SubscriptionCharge extends Model
             'charged_on' => $values['charged_on']?->format('Y-m-d'),
             'amount' => $values['amount'],
             'amount_thb' => $values['amount_thb'],
+            'payment_method_id' => $values['payment_method_id'],
             'credit_card_id' => $values['credit_card_id'],
             'notes' => $values['notes'],
         ];
@@ -480,6 +519,7 @@ class SubscriptionCharge extends Model
             'charged_on' => $this->charged_on?->format('Y-m-d'),
             'amount' => $this->amount,
             'amount_thb' => $this->amount_thb,
+            'payment_method_id' => $this->payment_method_id,
             'credit_card_id' => $this->credit_card_id,
             'notes' => $this->notes,
         ];

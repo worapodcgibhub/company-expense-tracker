@@ -265,29 +265,17 @@ test('editing warns when the current channel has been switched off', function ()
 
 test('detail and list pages show a transfer subscription without a card', function () {
     $transfer = transferMethod('โอนค่าเช่าเซิร์ฟเวอร์', account: ['last_four' => '5678']);
-    $subscription = Subscription::factory()->create(['credit_card_id' => null, 'payment_method_id' => $transfer->id, 'name' => 'Colocation ตัวอย่าง']);
+    $subscription = Subscription::factory()->create(['credit_card_id' => null, 'payment_method_id' => $transfer->id, 'name' => 'Colocation ตัวอย่าง', 'next_charge_date' => now()->startOfDay()->addDays(2)]);
 
     Livewire::actingAs($this->owner)->test('pages::subscriptions.show', ['subscription' => $subscription])
         ->assertSee('โอนค่าเช่าเซิร์ฟเวอร์')->assertSee('••••5678')->assertSee('ต้องกดยืนยันว่าจ่ายจริง')
-        ->assertSeeHtml('data-test="record-charge-not-yet"')
-        ->assertDontSeeHtml('data-test="record-charge-button"');
+        ->assertSeeHtml('data-test="record-charge-button"')
+        ->assertSee('ยืนยันการชำระเงิน (รอบ');
 
     Livewire::actingAs($this->owner)->test('pages::subscriptions.index')
         ->assertSee('Colocation ตัวอย่าง')->assertSee('โอนค่าเช่าเซิร์ฟเวอร์');
 
     expect($subscription->needsNewCard())->toBeFalse();
-});
-
-test('recording a charge is not offered yet for a subscription without a card', function () {
-    $transfer = transferMethod();
-    $subscription = Subscription::factory()->create([
-        'credit_card_id' => null, 'payment_method_id' => $transfer->id, 'next_charge_date' => now()->startOfDay(),
-    ]);
-
-    Livewire::actingAs($this->owner)->test('pages::charges.form', ['subscription' => $subscription])
-        ->assertSee('จะเปิดให้ใช้ในขั้นถัดไป');
-
-    expect(SubscriptionCharge::count())->toBe(0);
 });
 
 /*

@@ -4,7 +4,7 @@ use App\Enums\ChargeOutcome;
 use App\Enums\Currency;
 use App\Exceptions\ChargeConflictException;
 use App\Models\AccountingPeriodClosure;
-use App\Models\CreditCard;
+use App\Models\PaymentMethod;
 use App\Models\Subscription;
 use App\Models\SubscriptionCharge;
 use App\Rules\NoFullCardNumber;
@@ -33,6 +33,11 @@ use Livewire\Component;
  *   the closed month itself is never changed.
  * - USD charges keep the USD amount; the baht the bank took is optional
  *   and can be filled in later.
+ * - Phase 3.1e-3: the payment method actually used is chosen here (the
+ *   subscription's method by default). Auto methods (card, direct debit):
+ *   "record the actual charge". Manual methods (transfer / PromptPay, cash):
+ *   "confirm the payment", which also needs an explicit tick that the money
+ *   was really paid. The person saving is stored as recorded_by.
  */
 new #[Title('บันทึกยอดตัดจริง')] class extends Component {
     #[Locked]
@@ -48,10 +53,11 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
     public string $charged_on = '';
     public string $amount = '';
     public string $amount_thb = '';
-    public string $credit_card_id = '';
+    public string $payment_method_id = '';
     public string $notes = '';
     public string $reason = '';
     public bool $confirm_closed_period = false;
+    public bool $confirm_paid = false;
 
     public function mount(?Subscription $subscription = null, ?SubscriptionCharge $charge = null): void
     {
@@ -65,7 +71,7 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
             $this->charged_on = $charge->charged_on?->format('Y-m-d') ?? '';
             $this->amount = $charge->isCharged() ? MoneyInput::fromMinor($charge->amount) : '';
             $this->amount_thb = $charge->amount_thb !== null ? MoneyInput::fromMinor($charge->amount_thb) : '';
-            $this->credit_card_id = (string) $charge->credit_card_id;
+            $this->payment_method_id = (string) $charge->payment_method_id;
             $this->notes = $charge->notes ?? '';
 
             return;
@@ -81,13 +87,13 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
         $this->dueDate = $due->format('Y-m-d');
         $this->charged_on = ($due->greaterThan($today) ? $today : $due)->format('Y-m-d');
         $this->amount = MoneyInput::fromMinor($subscription->estimated_amount);
-        $this->credit_card_id = (string) $subscription->credit_card_id;
+        $this->payment_method_id = (string) $subscription->payment_method_id;
     }
 
     #[Computed]
     public function subscription(): Subscription
     {
-        return Subscription::with('creditCard')->findOrFail($this->subscriptionId);
+        return Subscription::with(['creditCard', 'paymentMethod'])->findOrFail($this->subscriptionId);
     }
 
     #[Computed]
@@ -97,15 +103,40 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
     }
 
     /**
-     * Every card, active ones first: a backdated charge may have been made
-     * on a card that has been deactivated since.
+     * Every payment method, active ones first: a backdated payment may have
+     * been made with a method that has been deactivated since.
      *
-     * @return Collection<int, CreditCard>
+     * @return Collection<int, PaymentMethod>
      */
     #[Computed]
-    public function cards(): Collection
+    public function methods(): Collection
     {
-        return CreditCard::query()->orderByRaw('deactivated_at IS NOT NULL')->orderBy('name')->get();
+        return PaymentMethod::query()->with(['creditCard', 'bankAccount'])->orderByRaw('deactivated_at IS NOT NULL')->orderBy('name')->get();
+    }
+
+    /**
+     * The method picked in the form (falls back to the subscription's).
+     */
+    #[Computed]
+    public function chosenMethod(): ?PaymentMethod
+    {
+        $picked = ctype_digit($this->payment_method_id) ? $this->methods->firstWhere('id', (int) $this->payment_method_id) : null;
+
+        return $picked ?? $this->subscription->paymentMethod;
+    }
+
+    /**
+     * Manual (transfer / PromptPay / cash): someone pays and confirms it.
+     */
+    #[Computed]
+    public function isManual(): bool
+    {
+        return $this->chosenMethod !== null && ! $this->chosenMethod->isAuto();
+    }
+
+    public function targetLabel(PaymentMethod $method): string
+    {
+        return $method->creditCard?->maskedNumber() ?? $method->bankAccount?->maskedNumber() ?? '';
     }
 
     /**
@@ -128,12 +159,8 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
             return 'รอบนี้ถูกบันทึกไปแล้ว หรือวันตัดบัตรถูกเปลี่ยน กรุณากลับไปหน้ารายละเอียด';
         }
 
-        if ($s->credit_card_id === null) {
-            return 'การบันทึกยอดของช่องทางที่ไม่ใช่บัตรเครดิตจะเปิดให้ใช้ในขั้นถัดไป (Phase 3.1e-3)';
-        }
-
         if (! $s->canRecordChargeOn()) {
-            return 'บันทึกยอดของรอบนี้ได้ตั้งแต่ '.ThaiFormat::date($s->next_charge_date->subDays(SubscriptionCharge::RECORD_AHEAD_DAYS)).' (ก่อนวันตัดบัตร '.SubscriptionCharge::RECORD_AHEAD_DAYS.' วัน)';
+            return 'บันทึกยอดของรอบนี้ได้ตั้งแต่ '.ThaiFormat::date($s->next_charge_date->subDays(SubscriptionCharge::RECORD_AHEAD_DAYS)).' (ก่อนกำหนดชำระ '.SubscriptionCharge::RECORD_AHEAD_DAYS.' วัน)';
         }
 
         return null;
@@ -250,7 +277,7 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
                     $fail('ยอดบาทต้องมากกว่า 0 ถ้ายังไม่ทราบ ให้เว้นว่างไว้ก่อน');
                 }
             }],
-            'credit_card_id' => ['required', 'integer', Rule::exists('credit_cards', 'id')],
+            'payment_method_id' => ['required', 'integer', Rule::exists('payment_methods', 'id')],
             'notes' => ['nullable', 'string', 'max:2000', new NoFullCardNumber],
             'reason' => [Rule::requiredIf($charge !== null), 'nullable', 'string', 'max:500', new NoFullCardNumber],
         ], [
@@ -262,12 +289,20 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
             'charged_on' => 'วันที่ตัดเงินจริง',
             'amount' => 'ยอดที่ตัดจริง',
             'amount_thb' => 'ยอดเงินบาทที่ธนาคารตัด',
-            'credit_card_id' => 'บัตรที่ถูกตัด',
+            'payment_method_id' => 'ช่องทางที่ใช้ชำระจริง',
             'notes' => 'หมายเหตุ',
             'reason' => 'เหตุผลของการแก้ไข',
         ]);
 
-        unset($this->closedPeriods);
+        unset($this->closedPeriods, $this->chosenMethod, $this->isManual);
+
+        // A new Manual payment must be confirmed explicitly: reaching the due
+        // date never counts as paid.
+        if ($charge === null && $charged && $this->isManual && ! $this->confirm_paid) {
+            $this->addError('confirm_paid', 'กรุณาติ๊กยืนยันว่าได้ชำระเงินรอบนี้แล้วจริง');
+
+            return;
+        }
 
         if ($this->closedPeriods !== [] && ! $this->confirm_closed_period) {
             $this->addError('confirm_closed_period', 'วันที่นี้อยู่ในงวดบัญชีที่ปิดแล้ว กรุณาติ๊กยืนยันว่าเป็นรายการย้อนหลัง');
@@ -280,7 +315,7 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
             'charged_on' => $charged ? CarbonImmutable::createFromFormat('!Y-m-d', (string) $validated['charged_on']) ?: null : null,
             'amount' => $charged ? (int) MoneyInput::toMinor((string) $validated['amount']) : 0,
             'amount_thb' => $charged && $foreign && ($validated['amount_thb'] ?? '') !== '' ? MoneyInput::toMinor((string) $validated['amount_thb']) : null,
-            'credit_card_id' => (int) $validated['credit_card_id'],
+            'payment_method_id' => (int) $validated['payment_method_id'],
             'notes' => $validated['notes'] ?? null,
         ];
 
@@ -301,7 +336,11 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
             return;
         }
 
-        Flux::toast(variant: 'success', text: $recorded->isCharged() ? 'บันทึกยอดตัดจริงแล้ว' : 'บันทึกว่ารอบนี้ไม่ถูกตัดเงินแล้ว');
+        Flux::toast(variant: 'success', text: match (true) {
+            ! $recorded->isCharged() => 'บันทึกว่ารอบนี้ไม่ถูกตัดเงินแล้ว',
+            $this->isManual => 'ยืนยันการชำระเงินแล้ว',
+            default => 'บันทึกยอดตัดจริงแล้ว',
+        });
         $this->redirectRoute('subscriptions.show', $subscription, navigate: true);
     }
 
@@ -326,6 +365,12 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
     $closed = $this->closedPeriods;
     $due = CarbonImmutable::createFromFormat('!Y-m-d', $dueDate);
     $backUrl = $editing ? route('charges.show', $editing) : route('subscriptions.show', $s);
+    $manual = $this->isManual;
+    $heading = match (true) {
+        $editing !== null => $manual ? 'แก้ไขการชำระเงิน' : 'แก้ไขยอดตัดจริง',
+        $manual => 'ยืนยันการชำระเงิน',
+        default => 'บันทึกยอดตัดจริง',
+    };
 @endphp
 
 <div class="mx-auto flex w-full max-w-3xl flex-col gap-6">
@@ -333,7 +378,7 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
         <a href="{{ $backUrl }}" wire:navigate class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800">
             <flux:icon.arrow-left class="size-4" /> {{ $editing ? 'กลับไปหน้ารายการตัดเงิน' : 'กลับไปหน้ารายละเอียด' }}
         </a>
-        <h1 class="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">{{ $editing ? 'แก้ไขยอดตัดจริง' : 'บันทึกยอดตัดจริง' }}</h1>
+        <h1 class="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl" data-test="charge-heading">{{ $heading }}</h1>
         <p class="text-sm text-slate-500">
             {{ $s->name }} · รอบครบกำหนด <strong class="text-slate-700" data-test="due-date">{{ $due ? ThaiFormat::date($due) : '–' }}</strong>
             · ยอดประมาณการ {{ $s->amountLabel() }}
@@ -371,12 +416,12 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
 
                     @if ($isCharged)
                         <div>
-                            <flux:input type="date" wire:model.live="charged_on" label="วันที่ตัดเงินจริง" :max="now()->format('Y-m-d')" required />
-                            <flux:text class="mt-1 text-xs">ตามวันที่ในใบแจ้งยอดบัตร บันทึกย้อนหลังได้</flux:text>
+                            <flux:input type="date" wire:model.live="charged_on" :label="$manual ? 'วันที่ชำระจริง' : 'วันที่ตัดเงินจริง'" :max="now()->format('Y-m-d')" required />
+                            <flux:text class="mt-1 text-xs">{{ $manual ? 'ตามวันที่ในสลิปโอนหรือหลักฐานการชำระ บันทึกย้อนหลังได้' : 'ตามวันที่ในใบแจ้งยอดบัตรหรือรายการเดินบัญชี บันทึกย้อนหลังได้' }}</flux:text>
                         </div>
 
                         <div>
-                            <flux:input wire:model.blur="amount" :label="'ยอดที่ตัดจริง ('.$s->currency->value.')'" placeholder="เช่น 590 หรือ 54.99" inputmode="decimal" required autocomplete="off" />
+                            <flux:input wire:model.blur="amount" :label="($manual ? 'ยอดที่ชำระจริง' : 'ยอดที่ตัดจริง').' ('.$s->currency->value.')'" placeholder="เช่น 590 หรือ 54.99" inputmode="decimal" required autocomplete="off" />
                             @if ($this->varianceNotice)
                                 <flux:text class="mt-1 text-xs !text-amber-700" data-test="variance-notice">{{ $this->varianceNotice }}</flux:text>
                             @endif
@@ -391,12 +436,23 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
                     @endif
 
                     <div class="sm:col-span-2">
-                        <flux:select wire:model="credit_card_id" label="บัตรที่ถูกตัด">
-                            @foreach ($this->cards as $option)
-                                <flux:select.option value="{{ $option->id }}">{{ $option->name }} · {{ $option->issuer }} · {{ $option->maskedNumber() }}{{ $option->isActive() ? '' : ' (ปิดใช้งาน)' }}</flux:select.option>
+                        <flux:select wire:model.live="payment_method_id" label="ช่องทางที่ใช้ชำระจริง">
+                            @foreach ($this->methods as $option)
+                                <flux:select.option value="{{ $option->id }}">{{ $option->name }}{{ $this->targetLabel($option) !== '' ? ' · '.$this->targetLabel($option) : '' }} · {{ $option->isAuto() ? 'Auto' : 'Manual' }}{{ $option->isActive() ? '' : ' (ปิดใช้งาน)' }}</flux:select.option>
                             @endforeach
                         </flux:select>
+                        <flux:text class="mt-1 text-xs" data-test="method-hint">ค่าเริ่มต้นคือช่องทางของ Subscription ถ้ารอบนี้จ่ายด้วยช่องทางอื่น ให้เลือกช่องทางที่ใช้จริง</flux:text>
                     </div>
+
+                    @if ($manual && $isCharged && ! $editing)
+                        <div class="sm:col-span-2 rounded-xl bg-amber-50 p-4 ring-1 ring-amber-200" data-test="confirm-paid-box">
+                            <flux:checkbox wire:model="confirm_paid" label="ยืนยันว่าได้ชำระเงินรอบนี้แล้วจริง (โอน / PromptPay / จ่ายเงินสด)" data-test="confirm-paid" />
+                            <flux:text class="mt-1 text-xs">รายการ Manual จะนับว่าจ่ายแล้วเมื่อยืนยันเท่านั้น แนบสลิปเป็นหลักฐานได้ในหน้ารายการหลังบันทึก</flux:text>
+                            @error('confirm_paid')
+                                <flux:text class="mt-1 text-xs !text-red-600">{{ $message }}</flux:text>
+                            @enderror
+                        </div>
+                    @endif
 
                     <div class="sm:col-span-2">
                         <flux:textarea wire:model="notes" label="หมายเหตุ" rows="2" maxlength="2000" />
@@ -424,15 +480,15 @@ new #[Title('บันทึกยอดตัดจริง')] class extends C
             @if ($editing)
                 <x-ui.card>
                     <flux:input wire:model="reason" label="เหตุผลของการแก้ไข" placeholder="เช่น ใบแจ้งยอดบัตรมาแล้ว ยอดจริงต่างจากที่บันทึก" maxlength="500" required autocomplete="off" />
-                    <flux:text class="mt-1 text-xs">ค่าเดิม ค่าใหม่ ผู้แก้ไข และเวลา จะถูกเก็บในประวัติการแก้ไข @if ($editing->isVerified()) การแก้ยอด วันที่ หรือบัตร จะยกเลิกสถานะ "ตรวจสอบแล้ว" ให้ฝ่ายบัญชีตรวจใหม่ @endif</flux:text>
+                    <flux:text class="mt-1 text-xs">ค่าเดิม ค่าใหม่ ผู้แก้ไข และเวลา จะถูกเก็บในประวัติการแก้ไข @if ($editing->isVerified()) การแก้ยอด วันที่ หรือช่องทางชำระเงิน จะยกเลิกสถานะ "ตรวจสอบแล้ว" ให้ฝ่ายบัญชีตรวจใหม่ @endif</flux:text>
                 </x-ui.card>
             @else
-                <flux:text class="text-sm">เมื่อบันทึกแล้ว วันตัดบัตรครั้งถัดไปจะเลื่อนไปรอบถัดไปให้อัตโนมัติ</flux:text>
+                <flux:text class="text-sm">เมื่อบันทึกแล้ว กำหนดชำระครั้งถัดไปจะเลื่อนไปรอบถัดไปให้อัตโนมัติ</flux:text>
             @endif
 
             <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <flux:button variant="ghost" :href="$backUrl" wire:navigate class="w-full sm:w-auto">ยกเลิก</flux:button>
-                <flux:button type="submit" variant="primary" class="w-full sm:w-auto" data-test="save-charge-button">บันทึก</flux:button>
+                <flux:button type="submit" variant="primary" class="w-full sm:w-auto" data-test="save-charge-button">{{ $manual && ! $editing ? 'ยืนยันการชำระเงิน' : 'บันทึก' }}</flux:button>
             </div>
         </form>
     @endif
