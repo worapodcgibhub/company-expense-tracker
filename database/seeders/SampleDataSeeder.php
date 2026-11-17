@@ -57,10 +57,15 @@ use Throwable;
  *   relative to the day it is run.
  * - Phase 3.1: also adds sample bank accounts (last four digits only) and
  *   payment methods (transfer, PromptPay/QR, direct debit, petty cash),
- *   found by name so a second run adds nothing. Sample expenses that need a
- *   payment method other than the card (colocation, internet, domain,
- *   freelancer, one-off costs, advances) wait for Phase 3.1e and the general
- *   expense phases: the pages still assume a card on every subscription.
+ *   found by name so a second run adds nothing.
+ * - Phase 3.1e-5: channelCatalog() adds the recurring costs paid through the
+ *   bank (colocation and domain by transfer, internet by direct debit,
+ *   freelancer by PromptPay) on those methods, with the same history,
+ *   receipts and idempotency as the card samples. They are NOT part of the
+ *   eight card / Auto samples. If their method (or its account) has been
+ *   switched off, that sample is skipped, never reactivated. One-off costs
+ *   (illustration, office equipment, travel) and the advance payment are not
+ *   subscriptions and wait for their own phases.
  * - Accounting periods are NOT closed and nothing is verified (that needs
  *   an Accountant): those remain decisions for real people.
  */
@@ -105,6 +110,32 @@ class SampleDataSeeder extends Seeder
         ];
     }
 
+    /**
+     * Phase 3.1e-5: sample recurring costs paid through the bank, not the
+     * card. They are separate from catalog() (the eight card / Auto samples)
+     * and are NOT counted in it. `method` is the name of one of
+     * paymentMethods(); the other keys are the same as in catalog().
+     *
+     * - Colocation (transfer, Manual) and domain (transfer, yearly, Manual)
+     * - Internet (direct debit, Auto)
+     * - Freelancer graphics (PromptPay / QR via SCB, Manual)
+     *
+     * One-off costs (illustration, office equipment, travel) and the advance
+     * payment are NOT here: they are not subscriptions and wait for their own
+     * phases.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public static function channelCatalog(): array
+    {
+        return [
+            ['name' => 'ค่าเช่า Colocation', 'vendor' => 'ผู้ให้บริการ Colocation (ตัวอย่าง)', 'pdf' => 'Colocation Provider', 'category' => SubscriptionCategory::CloudHosting, 'currency' => Currency::THB, 'amount' => 850_000, 'cycle' => BillingCycle::Monthly, 'next_in' => 5, 'tax_invoice' => true, 'method' => 'โอนเงินผ่านธนาคาร KBank (ตัวอย่าง)'],
+            ['name' => 'ค่า Internet สำนักงาน', 'vendor' => 'ผู้ให้บริการอินเทอร์เน็ต (ตัวอย่าง)', 'pdf' => 'Internet Provider', 'category' => SubscriptionCategory::Communication, 'currency' => Currency::THB, 'amount' => 129_000, 'cycle' => BillingCycle::Monthly, 'next_in' => 10, 'tax_invoice' => true, 'method' => 'หักบัญชีอัตโนมัติ KBank (ตัวอย่าง)'],
+            ['name' => 'ค่าโดเมนเว็บไซต์', 'vendor' => 'ผู้ให้บริการโดเมน (ตัวอย่าง)', 'pdf' => 'Domain Registrar', 'category' => SubscriptionCategory::CloudHosting, 'currency' => Currency::THB, 'amount' => 45_000, 'cycle' => BillingCycle::Yearly, 'next_in' => 200, 'method' => 'โอนเงินผ่านธนาคาร KBank (ตัวอย่าง)'],
+            ['name' => 'ค่าจ้างฟรีแลนซ์ออกแบบกราฟิก', 'vendor' => 'ฟรีแลนซ์ (ตัวอย่าง)', 'pdf' => 'Freelance Designer', 'category' => SubscriptionCategory::Design, 'currency' => Currency::THB, 'amount' => 350_000, 'cycle' => BillingCycle::Monthly, 'next_in' => 4, 'deltas' => [0, 0, 50_000, 0, 0, 0], 'unavailable' => [3 => 'ฟรีแลนซ์ส่งเพียงสลิปโอน ไม่ออกใบเสร็จ'], 'method' => 'PromptPay / QR ผ่านบัญชี SCB (ตัวอย่าง)'],
+        ];
+    }
+
     public function run(): void
     {
         $this->realNow = CarbonImmutable::now();
@@ -115,28 +146,47 @@ class SampleDataSeeder extends Seeder
 
         $todo = array_values(array_filter(self::catalog(), fn (array $item) => ! $this->alreadyExists($item['name'], $item['vendor'])));
 
+        $channelTodo = array_values(array_filter(self::channelCatalog(), fn (array $item) => ! $this->alreadyExists($item['name'], $item['vendor'])));
+
         $channelsMissing = $this->channelsMissing();
 
-        if ($todo === [] && ! $channelsMissing) {
+        if ($todo === [] && $channelTodo === [] && ! $channelsMissing) {
             $this->say('ข้อมูลตัวอย่างมีครบแล้ว ไม่ได้เพิ่มอะไร');
 
             return;
         }
 
         $added = ['accounts' => 0, 'methods' => 0];
+        $channelAdded = 0;
+        $channelUnusable = [];
 
         try {
-            DB::transaction(function () use ($todo, $owner, $channelsMissing, &$added) {
+            DB::transaction(function () use ($todo, $channelTodo, $owner, $channelsMissing, &$added, &$channelAdded, &$channelUnusable) {
                 if ($channelsMissing) {
                     $added = $this->seedPaymentChannels($owner);
                 }
 
                 if ($todo !== []) {
-                    $card = $this->cardToUse();
+                    $method = $this->methodOfCard($this->cardToUse());
 
                     foreach ($todo as $item) {
-                        $this->seedSubscription($item, $owner, $card);
+                        $this->seedSubscription($item, $owner, $method);
                     }
+                }
+
+                foreach ($channelTodo as $item) {
+                    $method = PaymentMethod::query()->with(['creditCard', 'bankAccount'])->where('name', $item['method'])->first();
+
+                    // A method someone switched off (or whose account is off) is
+                    // never reactivated or replaced: the sample is skipped.
+                    if ($method === null || ! $method->isUsable()) {
+                        $channelUnusable[] = $item['name'];
+
+                        continue;
+                    }
+
+                    $this->seedSubscription($item, $owner, $method);
+                    $channelAdded++;
                 }
             });
         } catch (Throwable $e) {
@@ -150,7 +200,21 @@ class SampleDataSeeder extends Seeder
         }
 
         $this->say('เพิ่มบัญชีธนาคารตัวอย่าง '.$added['accounts'].' บัญชี ช่องทางชำระเงิน '.$added['methods'].' ช่องทาง');
-        $this->say('เพิ่ม Subscription ตัวอย่าง '.count($todo).' รายการ (ข้าม '.(count(self::catalog()) - count($todo)).' รายการที่มีอยู่แล้ว)');
+        $this->say('เพิ่ม Subscription ตัวอย่างที่ชำระด้วยบัตร '.count($todo).' รายการ (ข้าม '.(count(self::catalog()) - count($todo)).' รายการที่มีอยู่แล้ว)');
+        $this->say('เพิ่ม Subscription ตัวอย่างที่ชำระผ่านธนาคาร/PromptPay '.$channelAdded.' รายการ (ข้าม '.(count(self::channelCatalog()) - count($channelTodo)).' รายการที่มีอยู่แล้ว)');
+
+        if ($channelUnusable !== []) {
+            $this->say('ข้ามเพราะช่องทางหรือบัญชีถูกปิดใช้งาน: '.implode(', ', $channelUnusable));
+        }
+    }
+
+    /**
+     * The payment method of the card (the card always has its own).
+     */
+    private function methodOfCard(CreditCard $card): PaymentMethod
+    {
+        return PaymentMethod::query()->where('credit_card_id', $card->id)->first()
+            ?? throw new RuntimeException("บัตร (รหัส {$card->id}) ยังไม่มีช่องทางชำระเงิน กรุณาตั้งค่าก่อน");
     }
 
     /**
@@ -285,7 +349,7 @@ class SampleDataSeeder extends Seeder
     /**
      * @param  array<string, mixed>  $item
      */
-    private function seedSubscription(array $item, User $owner, CreditCard $card): void
+    private function seedSubscription(array $item, User $owner, PaymentMethod $method): void
     {
         /** @var BillingCycle $cycle */
         $cycle = $item['cycle'];
@@ -309,7 +373,8 @@ class SampleDataSeeder extends Seeder
             'vendor' => $item['vendor'],
             'category' => $item['category'],
             'responsible_user_id' => $owner->id,
-            'credit_card_id' => $card->id,
+            'credit_card_id' => $method->credit_card_id,
+            'payment_method_id' => $method->id,
             'billing_cycle' => $cycle,
             'billing_day' => $billingDay,
             'next_charge_date' => $firstDue,
@@ -336,7 +401,7 @@ class SampleDataSeeder extends Seeder
 
             // Whole months between the cycle and today (0 = within the last month).
             $age = (int) floor(abs($due->diffInMonths($this->realNow)));
-            $this->seedCycle($item, $subscription, $owner, $card, $due, $i, $age);
+            $this->seedCycle($item, $subscription, $owner, $method, $due, $i, $age);
         }
 
         if ($pauseAfter !== null && isset($dues[$pauseAfter - 1])) {
@@ -348,7 +413,7 @@ class SampleDataSeeder extends Seeder
     /**
      * @param  array<string, mixed>  $item
      */
-    private function seedCycle(array $item, Subscription $subscription, User $owner, CreditCard $card, CarbonImmutable $due, int $index, int $age): void
+    private function seedCycle(array $item, Subscription $subscription, User $owner, PaymentMethod $method, CarbonImmutable $due, int $index, int $age): void
     {
         /** @var Currency $currency */
         $currency = $item['currency'];
@@ -371,7 +436,7 @@ class SampleDataSeeder extends Seeder
             'charged_on' => $skipped ? null : $chargedOn,
             'amount' => $skipped ? 0 : $recordedAmount,
             'amount_thb' => $thb,
-            'credit_card_id' => $card->id,
+            'payment_method_id' => $method->id,
             'notes' => $skipped ? 'ได้รับเดือนฟรีจากโปรโมชันต่ออายุ' : null,
         ], $owner);
 
@@ -387,7 +452,7 @@ class SampleDataSeeder extends Seeder
                 'charged_on' => $chargedOn,
                 'amount' => $actual,
                 'amount_thb' => $foreign ? $this->toThb($actual, $age) : null,
-                'credit_card_id' => $card->id,
+                'payment_method_id' => $method->id,
                 'notes' => null,
             ], $owner, $revise === 'fill_thb' ? 'ได้ใบแจ้งยอดบัตรแล้ว กรอกยอดเงินบาทที่ธนาคารตัดจริง' : 'ปรับเป็นยอดจริงตามใบแจ้งยอดบัตร (มีค่าใช้งานเพิ่ม)');
         }

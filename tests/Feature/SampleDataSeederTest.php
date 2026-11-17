@@ -54,14 +54,14 @@ function sampleCounts(): array
 test('it adds the sample subscriptions with about six months of history, using the existing owner and card', function () {
     $this->seed(SampleDataSeeder::class);
 
-    $catalog = SampleDataSeeder::catalog();
+    $catalog = array_merge(SampleDataSeeder::catalog(), SampleDataSeeder::channelCatalog());
     $subscriptions = Subscription::all();
 
     expect($subscriptions)->toHaveCount(count($catalog))
-        ->and(count($catalog))->toBe(8)
+        ->and(count(SampleDataSeeder::catalog()))->toBe(8)
         ->and($subscriptions->every(fn ($s) => $s->notes === SampleDataSeeder::MARKER))->toBeTrue()
         ->and($subscriptions->pluck('responsible_user_id')->unique()->all())->toBe([$this->owner->id])
-        ->and($subscriptions->pluck('credit_card_id')->unique()->all())->toBe([$this->card->id])
+        ->and($subscriptions->whereNotNull('credit_card_id')->pluck('credit_card_id')->unique()->all())->toBe([$this->card->id])
         // No new users or cards.
         ->and(User::count())->toBe(1)
         ->and(CreditCard::count())->toBe(1);
@@ -107,7 +107,7 @@ test('existing data is never changed, and a sample that already exists is skippe
         // Two skipped: the same name + vendor (case ignored), even when cancelled.
         ->and(Subscription::where('name', 'ChatGPT Plus')->count())->toBe(1)
         ->and(Subscription::where('name', 'Claude Pro')->count())->toBe(1)
-        ->and(Subscription::where('notes', SampleDataSeeder::MARKER)->count())->toBe(count(SampleDataSeeder::catalog()) - 2)
+        ->and(Subscription::where('notes', SampleDataSeeder::MARKER)->count())->toBe(count(SampleDataSeeder::catalog()) + count(SampleDataSeeder::channelCatalog()) - 2)
         ->and($existing->charges()->count())->toBe(1);
 });
 
@@ -205,7 +205,7 @@ test('a sample card is added only when there is no active card', function () {
     $card = CreditCard::query()->whereNull('deactivated_at')->sole();
     expect($card->notes)->toBe(SampleDataSeeder::MARKER)
         ->and($card->last_four)->toHaveLength(4)
-        ->and(Subscription::pluck('credit_card_id')->unique()->all())->toBe([$card->id]);
+        ->and(Subscription::whereNotNull('credit_card_id')->pluck('credit_card_id')->unique()->all())->toBe([$card->id]);
 });
 
 test('if anything fails, nothing at all is added and no file is left behind', function () {
@@ -346,11 +346,124 @@ test('the new pages show the sample channels', function () {
 test('the card sample set is exactly eight automatic card subscriptions', function () {
     $this->seed(SampleDataSeeder::class);
 
-    $subscriptions = Subscription::with('paymentMethod')->get();
+    $subscriptions = Subscription::with('paymentMethod')->get()->filter(fn ($s) => $s->paymentMethod->type === PaymentMethodType::Card);
 
     expect($subscriptions)->toHaveCount(8)
-        ->and($subscriptions->every(fn ($s) => $s->paymentMethod->type === PaymentMethodType::Card && $s->paymentMethod->settlement === SettlementMode::Auto))->toBeTrue()
+        ->and($subscriptions->every(fn ($s) => $s->paymentMethod->settlement === SettlementMode::Auto))->toBeTrue()
         ->and($subscriptions->pluck('name')->all())->toContain('ChatGPT Plus', 'Claude Pro', 'Cloud Server (Droplet)', 'Cloudflare Pro', 'Web Hosting (Business)', 'Canva Pro', 'ค่า VPS', 'ค่า AI สำหรับคอนเทนต์');
+});
+
+/*
+|--------------------------------------------------------------------------
+| Phase 3.1e-5: samples paid through the bank / PromptPay
+|--------------------------------------------------------------------------
+*/
+
+test('it adds four bank samples on their own methods, separate from the eight card samples', function () {
+    $this->seed(SampleDataSeeder::class);
+
+    $bank = Subscription::with('paymentMethod.bankAccount')->whereNull('credit_card_id')->get()->keyBy('name');
+
+    expect($bank)->toHaveCount(4)
+        ->and(count(SampleDataSeeder::channelCatalog()))->toBe(4)
+        ->and($bank['ค่าเช่า Colocation']->estimated_amount)->toBe(850_000)
+        ->and($bank['ค่าเช่า Colocation']->paymentMethod->name)->toBe('โอนเงินผ่านธนาคาร KBank (ตัวอย่าง)')
+        ->and($bank['ค่าเช่า Colocation']->paymentMethod->settlement)->toBe(SettlementMode::Manual)
+        ->and($bank['ค่าเช่า Colocation']->billing_cycle)->toBe(BillingCycle::Monthly)
+        ->and($bank['ค่า Internet สำนักงาน']->estimated_amount)->toBe(129_000)
+        ->and($bank['ค่า Internet สำนักงาน']->paymentMethod->type)->toBe(PaymentMethodType::DirectDebit)
+        ->and($bank['ค่า Internet สำนักงาน']->paymentMethod->settlement)->toBe(SettlementMode::Auto)
+        ->and($bank['ค่าโดเมนเว็บไซต์']->estimated_amount)->toBe(45_000)
+        ->and($bank['ค่าโดเมนเว็บไซต์']->billing_cycle)->toBe(BillingCycle::Yearly)
+        ->and($bank['ค่าจ้างฟรีแลนซ์ออกแบบกราฟิก']->estimated_amount)->toBe(350_000)
+        ->and($bank['ค่าจ้างฟรีแลนซ์ออกแบบกราฟิก']->paymentMethod->name)->toBe('PromptPay / QR ผ่านบัญชี SCB (ตัวอย่าง)')
+        ->and($bank['ค่าจ้างฟรีแลนซ์ออกแบบกราฟิก']->paymentMethod->bankAccount->last_four)->toBe('9012')
+        ->and($bank->every(fn ($s) => $s->notes === SampleDataSeeder::MARKER && $s->status === SubscriptionStatus::Active && $s->isActive()))->toBeTrue()
+        ->and($bank->every(fn ($s) => $s->paymentMethod->isUsable()))->toBeTrue();
+});
+
+test('bank samples have history recorded on their own method, with no card and a recorder', function () {
+    $this->seed(SampleDataSeeder::class);
+
+    foreach (Subscription::whereNull('credit_card_id')->get() as $subscription) {
+        $charges = $subscription->charges;
+
+        expect($charges)->not->toBeEmpty()
+            ->and($charges->every(fn ($c) => $c->payment_method_id === $subscription->payment_method_id && $c->credit_card_id === null))->toBeTrue()
+            ->and($charges->every(fn ($c) => $c->recorded_by === $this->owner->id))->toBeTrue()
+            ->and($subscription->next_charge_date->greaterThan(now()))->toBeTrue();
+    }
+
+    expect(Subscription::where('name', 'ค่าเช่า Colocation')->sole()->charges)->toHaveCount(6)
+        ->and(Subscription::where('name', 'ค่าโดเมนเว็บไซต์')->sole()->charges)->toHaveCount(1)
+        ->and(Subscription::where('name', 'ค่าจ้างฟรีแลนซ์ออกแบบกราฟิก')->sole()->charges->pluck('amount')->contains(400_000))->toBeTrue();
+});
+
+test('bank samples are not overdue and not paid early: they show as upcoming, Manual or Auto', function () {
+    $this->seed(SampleDataSeeder::class);
+    $this->actingAs($this->owner);
+
+    $html = $this->get(route('dashboard'))->assertOk()->getContent();
+
+    expect($html)->toContain('ค่าเช่า Colocation')
+        ->and($html)->toContain('data-test="action-item-manual-due"')
+        ->and($html)->toContain('ค่าจ้างฟรีแลนซ์ออกแบบกราฟิก');
+
+    $this->get(route('subscriptions.index', ['status' => 'all']))->assertOk()
+        ->assertSee('ค่า Internet สำนักงาน')->assertSee('โอนเงินผ่านธนาคาร KBank (ตัวอย่าง)')->assertSee('หักบัญชีอัตโนมัติ KBank (ตัวอย่าง)');
+    $this->get(route('subscriptions.show', Subscription::where('name', 'ค่าเช่า Colocation')->sole()))->assertOk()->assertSee('กำหนดชำระครั้งถัดไป');
+});
+
+test('running again adds no bank samples, and one that exists is skipped without a change', function () {
+    $this->seed(SampleDataSeeder::class);
+    $first = sampleCounts();
+
+    $this->seed(SampleDataSeeder::class);
+
+    expect(sampleCounts())->toBe($first);
+});
+
+test('a bank sample that already exists as a real subscription is skipped without a change', function () {
+    $real = Subscription::factory()->create(['name' => 'ค่าโดเมนเว็บไซต์', 'vendor' => 'ผู้ให้บริการโดเมน (ตัวอย่าง)', 'notes' => 'ของจริง', 'estimated_amount' => 77_700]);
+    $snapshot = $real->fresh()->getAttributes();
+
+    $this->seed(SampleDataSeeder::class);
+
+    expect($real->fresh()->getAttributes())->toBe($snapshot)
+        ->and(Subscription::where('name', 'ค่าโดเมนเว็บไซต์')->count())->toBe(1)
+        ->and(Subscription::whereNull('credit_card_id')->count())->toBe(3);   // the other three bank samples
+});
+
+test('a bank sample whose method was switched off is skipped, and nothing is reactivated or changed', function () {
+    $this->seed(SampleDataSeeder::class);
+    Subscription::whereNull('credit_card_id')->get()->each(fn ($s) => $s->forceFill(['notes' => 'ของจริง'])->save());
+    $off = PaymentMethod::where('name', 'PromptPay / QR ผ่านบัญชี SCB (ตัวอย่าง)')->firstOrFail();
+    $off->forceFill(['deactivated_at' => now()])->save();
+    Subscription::where('name', 'ค่าจ้างฟรีแลนซ์ออกแบบกราฟิก')->firstOrFail()->forceFill(['status' => SubscriptionStatus::Cancelled, 'name' => 'อื่น'])->save();
+    $before = sampleCounts();
+    $offBefore = $off->fresh()->getAttributes();
+
+    $this->seed(SampleDataSeeder::class);
+
+    // The freelancer sample is gone from the list only because it was renamed: it is skipped, not re-added with a dead method.
+    expect(Subscription::where('name', 'ค่าจ้างฟรีแลนซ์ออกแบบกราฟิก')->count())->toBe(0)
+        ->and(sampleCounts())->toBe($before)
+        ->and($off->fresh()->getAttributes())->toBe($offBefore)
+        ->and($off->fresh()->isActive())->toBeFalse();
+});
+
+test('the bank samples add no amount to anything but their own subscriptions', function () {
+    $real = Subscription::factory()->create(['name' => 'ของจริง', 'vendor' => 'ผู้ขายจริง']);
+    $charge = SubscriptionCharge::factory()->for($real)->create(['amount' => 99_900]);
+    $rows = $charge->fresh()->getAttributes();
+
+    $this->seed(SampleDataSeeder::class);
+
+    $sampleIds = Subscription::where('notes', SampleDataSeeder::MARKER)->pluck('id');
+
+    expect($charge->fresh()->getAttributes())->toBe($rows)
+        ->and(SubscriptionCharge::whereNotIn('subscription_id', $sampleIds->push($real->id))->count())->toBe(0)
+        ->and(SubscriptionCharge::whereIn('subscription_id', Subscription::whereNull('credit_card_id')->pluck('id'))->charged()->count())->toBeGreaterThan(10);
 });
 
 test('a database that already has the older samples keeps them and gets only the missing ones', function () {
@@ -367,7 +480,7 @@ test('a database that already has the older samples keeps them and gets only the
 
     $this->seed(SampleDataSeeder::class);
 
-    expect(Subscription::count())->toBe(12)                                   // 10 existing + VPS + AI
+    expect(Subscription::count())->toBe(16)                                   // 10 existing + VPS + AI + 4 bank samples
         ->and($older->map(fn ($s) => $s->fresh()->getAttributes())->all())->toBe($before)
         ->and($charges->map(fn ($c) => $c->fresh()->getAttributes())->all())->toBe($chargesBefore)
         ->and(Subscription::whereIn('name', ['ค่า VPS', 'ค่า AI สำหรับคอนเทนต์'])->count())->toBe(2)
@@ -376,5 +489,5 @@ test('a database that already has the older samples keeps them and gets only the
 
     $this->seed(SampleDataSeeder::class);
 
-    expect(Subscription::count())->toBe(12);
+    expect(Subscription::count())->toBe(16);
 });
