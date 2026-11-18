@@ -25,18 +25,18 @@
                         {{ __('ระบบภายในบริษัท') }}
                     </p>
                     <h2 class="text-4xl leading-tight font-bold tracking-tight xl:text-5xl">
-                        {{ __('ติดตามทุกค่าใช้จ่าย') }}<br>
-                        <span class="text-cyan-200">{{ __('ไม่พลาดทุกรอบตัดบัตร') }}</span>
+                        {{ __('จัดการค่าใช้จ่ายบริษัท') }}<br>
+                        <span class="text-cyan-200">{{ __('ครบ จบ ในที่เดียว') }}</span>
                     </h2>
                     <p class="mt-5 text-base leading-relaxed text-indigo-100">
-                        {{ __('รู้ล่วงหน้าว่าบริการไหนจะถูกตัดเงินเมื่อไร ยืนยันยอดจริงได้ทันที และไม่มีใบเสร็จตกหล่นก่อนสรุปยอดประจำเดือน') }}
+                        {{ __('ติดตามกำหนดชำระ บันทึกค่าใช้จ่าย และตรวจสอบเอกสารได้อย่างเป็นระบบ เพื่อให้ทุกยอดจ่ายไม่ตกหล่น') }}
                     </p>
 
                     <ul class="mt-10 space-y-4">
                         @foreach ([
-                            ['icon' => 'calendar-days', 'title' => __('แจ้งเตือนก่อนถึงรอบตัดบัตร'), 'text' => __('ล่วงหน้า 7, 3 และ 1 วัน')],
-                            ['icon' => 'check-badge', 'title' => __('ยืนยันยอดที่ถูกตัดจริง'), 'text' => __('รองรับทั้งเงินบาทและดอลลาร์')],
-                            ['icon' => 'document-check', 'title' => __('ติดตามใบเสร็จที่ยังขาด'), 'text' => __('ฝ่ายบัญชีไม่ต้องแก้งานย้อนหลัง')],
+                            ['icon' => 'calendar-days', 'title' => __('รู้ล่วงหน้า'), 'text' => __('รายการใกล้ตัดบัตรหรือถึงกำหนดโอน')],
+                            ['icon' => 'clipboard-document-list', 'title' => __('บันทึกครบ'), 'text' => __('ทั้งค่าใช้จ่ายประจำและค่าใช้จ่ายทั่วไป')],
+                            ['icon' => 'document-magnifying-glass', 'title' => __('ตรวจสอบง่าย'), 'text' => __('ยอดจ่ายจริง รายงานรายเดือน และใบเสร็จ')],
                         ] as $feature)
                             <li class="flex items-start gap-4">
                                 <span class="flex size-10 shrink-0 items-center justify-center rounded-xl bg-white/15 ring-1 ring-white/25">
