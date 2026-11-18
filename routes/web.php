@@ -4,6 +4,7 @@ use App\Http\Controllers\ChargeReceiptController;
 use App\Models\AccountingPeriodClosure;
 use App\Models\BankAccount;
 use App\Models\CreditCard;
+use App\Models\Expense;
 use App\Models\PaymentMethod;
 use App\Models\Subscription;
 use App\Models\SubscriptionCharge;
@@ -73,6 +74,20 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->middleware('can:update,charge')
         ->whereNumber('charge')
         ->name('charges.edit');
+
+    // One-off expenses (ExpensePolicy): everyone adds; Staff see and change
+    // only their own, nobody changes one in a closed accounting month.
+    // `create` must stay above `{expense}`.
+    Route::livewire('expenses', 'pages::expenses.index')
+        ->middleware('can:viewAny,'.Expense::class)
+        ->name('expenses.index');
+    Route::livewire('expenses/create', 'pages::expenses.form')
+        ->middleware('can:create,'.Expense::class)
+        ->name('expenses.create');
+    Route::livewire('expenses/{expense}/edit', 'pages::expenses.form')
+        ->middleware('can:update,expense')
+        ->whereNumber('expense')
+        ->name('expenses.edit');
 
     // Document files (private disk). The only way to open them: checks
     // ChargeReceiptPolicy::view (same people who may view the charge).

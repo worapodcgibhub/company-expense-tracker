@@ -44,11 +44,24 @@ function runMigrations(string $command, array $options = []): void
     Artisan::call($command, array_merge(['--database' => 'migb', '--force' => true], $options));
 }
 
-/** A fresh temporary database with every migration run, then B rolled back (the state after Phase 3.1a). */
+/**
+ * How many migrations must be rolled back to undo B: B itself plus every
+ * migration added after it (later phases), so this keeps working when new
+ * migrations are added.
+ */
+function stepsBackToBeforeB(): int
+{
+    $names = collect(glob(database_path('migrations/*.php')))->map(fn ($file) => basename($file))->sort()->values();
+    $b = $names->search(fn ($name) => str_contains($name, 'make_card_optional_and_link_payment_method'));
+
+    return $names->count() - $b;
+}
+
+/** A fresh temporary database with every migration run, then B (and anything after it) rolled back (the state after Phase 3.1a). */
 function databaseAtPhase31a(): void
 {
     runMigrations('migrate:fresh');
-    runMigrations('migrate:rollback', ['--step' => 1]);
+    runMigrations('migrate:rollback', ['--step' => stepsBackToBeforeB()]);
 }
 
 /**
@@ -200,7 +213,7 @@ test('migrate, rollback and migrate again keep every row, id, index and relation
         expect(DB::connection('migb')->scalar("select sql from sqlite_master where name = 'subscription_charges'"))->toContain('autoincrement');
 
         // 2) rollback: structure is exactly the Phase 3.1a one again, data unchanged
-        runMigrations('migrate:rollback', ['--step' => 1]);
+        runMigrations('migrate:rollback', ['--step' => stepsBackToBeforeB()]);
         expect(tableStructure('subscriptions'))->toEqual($subsA)
             ->and(tableStructure('subscription_charges'))->toEqual($chargesA)
             ->and(dataSnapshot())->toEqual($expected)
@@ -260,7 +273,7 @@ test('rollback refuses to run while a row has no card and leaves the data alone'
         $structure = [tableStructure('subscriptions'), tableStructure('subscription_charges')];
         $data = dataSnapshot();
 
-        expect(fn () => runMigrations('migrate:rollback', ['--step' => 1]))
+        expect(fn () => runMigrations('migrate:rollback', ['--step' => stepsBackToBeforeB()]))
             ->toThrow(RuntimeException::class, 'ย้อนกลับไม่ได้');
 
         expect([tableStructure('subscriptions'), tableStructure('subscription_charges')])->toEqual($structure)

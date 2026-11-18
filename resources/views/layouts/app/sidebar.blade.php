@@ -30,6 +30,12 @@
                             </flux:sidebar.item>
                         @endcan
 
+                        @can('viewAny', \App\Models\Expense::class)
+                            <flux:sidebar.item icon="banknotes" :href="route('expenses.index')" :current="request()->routeIs('expenses.*')" wire:navigate data-test="expenses-menu">
+                                {{ __('ค่าใช้จ่ายทั่วไป') }}
+                            </flux:sidebar.item>
+                        @endcan
+
                         @can('viewAny', \App\Models\CreditCard::class)
                             <flux:sidebar.item icon="credit-card" :href="route('credit-cards.index')" :current="request()->routeIs('credit-cards.*')" wire:navigate data-test="credit-cards-menu">
                                 {{ __('บัตรที่ใช้ชำระเงิน') }}
