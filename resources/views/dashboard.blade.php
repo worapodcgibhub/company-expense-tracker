@@ -30,6 +30,8 @@
         'missing_receipt_count' => $charges->waitingForReceiptCount(),
     ];
     $upcomingCharges = $subscriptions->upcoming(30);
+    $upcomingLimit = 8;
+    $upcomingShown = $upcomingCharges->take($upcomingLimit);
 
     /*
      * Action needed (Phase 3.1e-4). Nothing here is counted as paid: a
@@ -45,13 +47,25 @@
     $autoAwaiting = $subscriptions->autoAwaitingConfirmation();
     $actionItems = $subscriptions->manualOverdue()
         ->map(fn ($s) => $makeItem($s, $s->dueLabel($today).' · ต้องชำระเอง ยังไม่ได้ยืนยันการชำระ', 'red', 'manual-overdue'))
-        ->concat($autoAwaiting->filter(fn ($s) => $s->isOverdue($today))->map(fn ($s) => $makeItem($s, $s->dueLabel($today).' · รอยืนยันยอดตัดจริง (Auto)', 'red', 'auto-overdue')))
+        ->concat($autoAwaiting->filter(fn ($s) => $s->isOverdue($today))->map(fn ($s) => $makeItem($s, $s->dueLabel($today).' · รอตรวจสอบยอด (Auto) ยังไม่ยืนยันยอดตัดจริง', 'red', 'auto-overdue')))
         ->concat($subscriptions->needingNewCard()->map(fn ($s) => ['url' => route('subscriptions.show', $s), 'name' => $s->name, 'label' => 'บัตรถูกปิดใช้งาน ต้องเปลี่ยนบัตร', 'tone' => 'red', 'kind' => 'card', 'channel' => null]))
         ->concat($subscriptions->needingNewPaymentMethod()->map(fn ($s) => ['url' => route('subscriptions.show', $s), 'name' => $s->name, 'label' => 'ช่องทางชำระเงินถูกปิดใช้งาน ต้องเปลี่ยนช่องทาง', 'tone' => 'red', 'kind' => 'method', 'channel' => null]))
         ->concat($charges->afterCloseUnverified()->map(fn ($c) => ['url' => route('charges.show', $c), 'name' => $c->subscription->name, 'label' => 'รายการย้อนหลังในงวดที่ปิดแล้ว รอฝ่ายบัญชีตรวจ', 'tone' => 'red', 'kind' => 'after-close', 'channel' => null]))
         ->concat($autoAwaiting->reject(fn ($s) => $s->isOverdue($today))->map(fn ($s) => $makeItem($s, 'ถึงกำหนดวันนี้ · รอยืนยันยอดตัดจริง (Auto)', 'amber', 'auto-due')))
         ->concat($subscriptions->manualDueSoon(7)->map(fn ($s) => $makeItem($s, ThaiFormat::date($s->next_charge_date).' · '.$s->dueLabel($today).' · ต้องชำระเอง (Manual)', 'amber', 'manual-due')))
         ->values();
+
+    // Display only: split into groups, most urgent (red) first in each group.
+    $actionGroups = [
+        ['title' => 'ต้องชำระเอง (Manual)', 'hint' => 'ยังไม่ได้ยืนยันการชำระ', 'kinds' => ['manual-overdue', 'manual-due']],
+        ['title' => 'รอตรวจสอบยอดตัดจริง (Auto)', 'hint' => 'ระบบตัดอัตโนมัติ รอยืนยันยอดจริง', 'kinds' => ['auto-overdue', 'auto-due']],
+        ['title' => 'ต้องแก้ไข', 'hint' => 'บัตร ช่องทางชำระ หรือรายการย้อนหลังหลังปิดงวด', 'kinds' => ['card', 'method', 'after-close']],
+    ];
+    $actionGroups = collect($actionGroups)
+        ->map(fn ($g) => $g + ['items' => $actionItems->whereIn('kind', $g['kinds'])->sortBy(fn ($i) => $i['tone'] === 'red' ? 0 : 1)->values()])
+        ->filter(fn ($g) => $g['items']->isNotEmpty())
+        ->values();
+    $urgentCount = $actionItems->where('tone', 'red')->count();
     $missingThb = $charges->missingThb();
     $recentExpenses = $charges->recent(5);
     $categoryBreakdown = $charges->categoryBreakdown();
@@ -105,10 +119,10 @@
         {{-- Summary cards --}}
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <x-ui.stat-card
-                :title="__('ค่าใช้จ่ายเดือนนี้')"
+                :title="__('ค่าใช้จ่ายเดือนนี้ (จ่ายจริง)')"
                 :value="ThaiFormat::money($summary['month_total'])"
                 :hint="$summary['month_missing_thb_count'] > 0
-                    ? ThaiFormat::monthYear($today).' · ยังไม่รวม USD '.$summary['month_missing_thb_count'].' รายการ ('.ThaiFormat::money($summary['month_missing_thb_usd'], 'USD').') ที่รอยอดบาท'
+                    ? ThaiFormat::monthYear($today).' · ยอดจ่ายจริง ยังไม่รวม USD '.$summary['month_missing_thb_count'].' รายการ ('.ThaiFormat::money($summary['month_missing_thb_usd'], 'USD').') ที่รอยอดบาท'
                     : ThaiFormat::monthYear($today)"
                 icon="banknotes"
                 tone="indigo"
@@ -144,7 +158,7 @@
             <x-ui.card class="lg:col-span-2">
                 <x-ui.section-header
                     :title="__('กำหนดชำระที่กำลังจะถึง')"
-                    :description="__('ค่าใช้จ่ายประจำทุกช่องทางที่ถึงกำหนดภายใน 30 วัน')"
+                    :description="__('ค่าใช้จ่ายประจำทุกช่องทางที่ถึงกำหนดภายใน 30 วัน (ยอดประมาณการ)')"
                     icon="calendar-days"
                 />
 
@@ -152,7 +166,7 @@
                     <span>ใช้งานอยู่ <strong class="text-slate-900">{{ number_format($subscriptions->activeCount()) }}</strong> บริการ</span>
                     @if ($monthlyEstimate)
                         <span>
-                            ประมาณการต่อเดือน
+                            ประมาณการต่อเดือน (ยังไม่ใช่ยอดจ่ายจริง)
                             @foreach ($monthlyEstimate as $currency => $amount)
                                 <strong class="text-slate-900">{{ ThaiFormat::money($amount, $currency) }}</strong>@if (! $loop->last) · @endif
                             @endforeach
@@ -169,7 +183,7 @@
                     />
                 @else
                     <ul class="divide-y divide-slate-100" data-test="upcoming-charges">
-                        @foreach ($upcomingCharges as $charge)
+                        @foreach ($upcomingShown as $charge)
                             @php $days = $charge->daysUntilCharge($today); @endphp
                             <li>
                                 <a href="{{ route('subscriptions.show', $charge) }}" wire:navigate class="flex items-center justify-between gap-3 py-3 hover:bg-slate-50">
@@ -198,11 +212,17 @@
                             </li>
                         @endforeach
                     </ul>
+                    @if ($upcomingCharges->count() > $upcomingLimit)
+                        <div class="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3" data-test="upcoming-view-all">
+                            <span class="text-xs text-slate-500">แสดง {{ $upcomingShown->count() }} จาก {{ number_format($upcomingCharges->count()) }} รายการที่ใกล้ถึงกำหนด</span>
+                            <a href="{{ route('subscriptions.index') }}" wire:navigate class="text-sm font-medium text-indigo-600 hover:text-indigo-700">ดูทั้งหมด →</a>
+                        </div>
+                    @endif
                     <p class="mt-3 text-xs text-slate-500">ยอดเป็นประมาณการ ยอดที่ตัดจริงอาจต่างไป โดยเฉพาะรายการสกุลเงิน USD</p>
                 @endif
             </x-ui.card>
 
-            <x-ui.card>
+            <x-ui.card class="h-full">
                 <x-ui.section-header
                     :title="__('ต้องดำเนินการ')"
                     :description="__('รายการที่ต้องชำระเอง เลยกำหนด หรือรอยืนยันยอดจริง')"
@@ -210,35 +230,56 @@
                 />
 
                 @if ($actionItems->isEmpty())
-                    <x-ui.empty-state
-                        icon="check-circle"
-                        tone="emerald"
-                        :title="__('ไม่มีรายการค้าง')"
-                        :description="__('ทุกอย่างเรียบร้อยดี')"
-                        compact
-                    />
+                    <div class="flex min-h-48 items-center justify-center">
+                        <x-ui.empty-state
+                            icon="check-circle"
+                            tone="emerald"
+                            :title="__('ไม่มีรายการค้าง')"
+                            :description="__('ทุกอย่างเรียบร้อยดี')"
+                            compact
+                        />
+                    </div>
                 @else
-                    <ul class="space-y-2" data-test="action-items">
-                        @foreach ($actionItems as $item)
-                            @php $red = $item['tone'] === 'red'; @endphp
-                            <li data-test="action-item-{{ $item['kind'] }}">
-                                <a href="{{ $item['url'] }}" wire:navigate @class([
-                                    'flex items-start gap-3 rounded-lg p-3 ring-1',
-                                    'bg-red-50/60 ring-red-100 hover:bg-red-50' => $red,
-                                    'bg-amber-50/60 ring-amber-100 hover:bg-amber-50' => ! $red,
-                                ])>
-                                    <flux:icon :icon="$red ? 'exclamation-triangle' : 'clock'" @class(['mt-0.5 size-4 shrink-0', 'text-red-500' => $red, 'text-amber-500' => ! $red]) />
-                                    <span class="min-w-0">
-                                        <span class="block truncate text-sm font-medium text-slate-900">{{ $item['name'] }}</span>
-                                        <span @class(['block text-xs', 'text-red-700' => $red, 'text-amber-800' => ! $red])>{{ $item['label'] }}</span>
-                                        @if ($item['channel'])
-                                            <span class="block truncate text-xs text-slate-500">{{ $item['channel'] }}</span>
-                                        @endif
-                                    </span>
-                                </a>
-                            </li>
-                        @endforeach
-                    </ul>
+                    <div class="space-y-4" data-test="action-items">
+                        @if ($urgentCount > 0)
+                            <p class="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-700 ring-1 ring-red-100" data-test="action-urgent-count">
+                                <flux:icon icon="exclamation-triangle" class="size-3.5" />
+                                เลยกำหนด / ต้องแก้ไข {{ number_format($urgentCount) }} รายการ
+                            </p>
+                        @endif
+
+                        <div class="max-h-[32rem] space-y-4 overflow-y-auto pe-1">
+                            @foreach ($actionGroups as $group)
+                                <section data-test="action-group">
+                                    <h3 class="mb-2 flex items-baseline justify-between gap-2">
+                                        <span class="text-sm font-semibold text-slate-900">{{ $group['title'] }} <span class="font-normal text-slate-500">({{ $group['items']->count() }})</span></span>
+                                    </h3>
+                                    <p class="-mt-1 mb-2 text-xs text-slate-500">{{ $group['hint'] }}</p>
+                                    <ul class="space-y-2">
+                                        @foreach ($group['items'] as $item)
+                                            @php $red = $item['tone'] === 'red'; @endphp
+                                            <li data-test="action-item-{{ $item['kind'] }}">
+                                                <a href="{{ $item['url'] }}" wire:navigate @class([
+                                                    'flex items-start gap-3 rounded-lg border-s-4 p-3 ring-1',
+                                                    'border-red-500 bg-red-50/60 ring-red-100 hover:bg-red-50' => $red,
+                                                    'border-amber-400 bg-amber-50/60 ring-amber-100 hover:bg-amber-50' => ! $red,
+                                                ])>
+                                                    <flux:icon :icon="$red ? 'exclamation-triangle' : 'clock'" @class(['mt-0.5 size-4 shrink-0', 'text-red-500' => $red, 'text-amber-500' => ! $red]) />
+                                                    <span class="min-w-0">
+                                                        <span @class(['block truncate text-sm text-slate-900', 'font-semibold' => $red, 'font-medium' => ! $red])>{{ $item['name'] }}</span>
+                                                        <span @class(['block text-xs', 'text-red-700' => $red, 'text-amber-800' => ! $red])>{{ $item['label'] }}</span>
+                                                        @if ($item['channel'])
+                                                            <span class="block truncate text-xs text-slate-500">{{ $item['channel'] }}</span>
+                                                        @endif
+                                                    </span>
+                                                </a>
+                                            </li>
+                                        @endforeach
+                                    </ul>
+                                </section>
+                            @endforeach
+                        </div>
+                    </div>
                 @endif
             </x-ui.card>
         </div>
@@ -248,7 +289,7 @@
             <x-ui.card class="lg:col-span-2">
                 <x-ui.section-header
                     :title="__('ค่าใช้จ่ายรายเดือน')"
-                    :description="__('ยอดเงินบาทที่ตัดจริงย้อนหลัง 6 เดือน')"
+                    :description="__('ยอดจ่ายจริงเป็นเงินบาทย้อนหลัง 6 เดือน (ไม่ใช่ยอดประมาณการ)')"
                     icon="chart-bar"
                 />
                 <x-ui.bar-chart
@@ -256,7 +297,7 @@
                     :empty-description="__('กราฟจะแสดงเมื่อมีการบันทึกค่าใช้จ่ายจริง')"
                 />
                 <p class="mt-3 text-xs text-slate-500">
-                    ไม่รวมรายการ USD ที่ยังไม่มียอดเงินบาท
+                    เฉพาะยอดที่จ่ายจริงแล้ว ไม่รวมประมาณการและไม่รวมรายการ USD ที่ยังไม่มียอดเงินบาท
                     @if ($hasClosedMonths) · เดือนที่ปิดงวดแล้วแสดงยอด ณ วันปิดงวด @endif
                 </p>
             </x-ui.card>
@@ -264,7 +305,7 @@
             <x-ui.card>
                 <x-ui.section-header
                     :title="__('แยกตามหมวดหมู่')"
-                    :description="__('สัดส่วนค่าใช้จ่ายเดือนนี้')"
+                    :description="__('สัดส่วนค่าใช้จ่ายเดือนนี้ (ยอดจ่ายจริง)')"
                     icon="chart-pie"
                 />
                 <x-ui.donut-chart

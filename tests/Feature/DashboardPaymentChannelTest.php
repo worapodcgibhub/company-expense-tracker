@@ -223,6 +223,37 @@ test('due or overdue items are not counted as paid; once confirmed they count ex
         ->and(actionItemFor($html, 'Auto ถึงกำหนด'))->toBe('');
 });
 
+test('confirming an overdue Auto charge clears its alert and shows the next cycle as upcoming', function () {
+    $debit = dashMethod(PaymentMethodType::DirectDebit, 'หักบัญชี KBank');
+    $auto = dashSubscription('Auto เลยกำหนด', $debit, -3, ['estimated_amount' => 129_000]);
+
+    $before = actionItemFor(dashboardHtml(), 'Auto เลยกำหนด');
+
+    expect($before)->toContain('data-test="action-item-auto-overdue"')
+        ->toContain('เลยกำหนด 3 วัน')
+        ->toContain('รอตรวจสอบยอด')
+        ->toContain('bg-red-50/60')
+        ->not->toContain('ชำระแล้ว');
+
+    $auto->recordCharge($auto->next_charge_date, [
+        'outcome' => ChargeOutcome::Charged, 'charged_on' => now(), 'amount' => 129_000, 'amount_thb' => null,
+        'payment_method_id' => $debit->id, 'notes' => null,
+    ], $this->owner);
+
+    $html = dashboardHtml();
+    preg_match('/<ul class="divide-y divide-slate-100" data-test="upcoming-charges">.*?<\/ul>/s', $html, $upcoming);
+
+    expect(SubscriptionCharge::count())->toBe(1)
+        ->and(SubscriptionCharge::sole()->due_date->toDateString())->toBe('2026-11-12')
+        ->and($auto->fresh()->next_charge_date->toDateString())->toBe('2026-12-12')
+        ->and($auto->fresh()->isOverdue())->toBeFalse()
+        ->and(actionItemFor($html, 'Auto เลยกำหนด'))->toBe('')
+        ->and($html)->not->toContain('data-test="action-item-auto-overdue"')
+        ->and($upcoming[0])->toContain('Auto เลยกำหนด')
+        ->toContain('อีก 27 วัน')
+        ->toContain('>Auto</span>');
+});
+
 test('viewing the dashboard changes no data', function () {
     $s = dashSubscription('VPS', dashMethod(PaymentMethodType::Card, 'บัตร'), -3);
     SubscriptionCharge::factory()->for($s)->create(['due_date' => '2026-10-12', 'charged_on' => '2026-10-12', 'amount' => 180_000]);
