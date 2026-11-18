@@ -420,6 +420,9 @@ new #[Title('รายการตัดเงิน')] class extends Component 
                 <h1 class="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">{{ $s->name }}</h1>
                 <div class="mt-2 flex flex-wrap gap-2" data-test="charge-badges">
                     <x-charge-badges :charge="$c" />
+                    @if ($s->is_sample)
+                        <x-ui.status-badge tone="amber" :dot="false" data-test="sample-badge">ข้อมูลตัวอย่าง</x-ui.status-badge>
+                    @endif
                 </div>
             </div>
 

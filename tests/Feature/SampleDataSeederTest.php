@@ -3,6 +3,7 @@
 use App\Enums\BillingCycle;
 use App\Enums\ChargeRevisionAction;
 use App\Enums\Currency;
+use App\Enums\DataSet;
 use App\Enums\PaymentMethodType;
 use App\Enums\ReceiptStatus;
 use App\Enums\SettlementMode;
@@ -114,7 +115,7 @@ test('existing data is never changed, and a sample that already exists is skippe
 test('the sample covers the statuses needed for a demo', function () {
     $this->seed(SampleDataSeeder::class);
 
-    $overview = new SubscriptionOverview($this->owner);
+    $overview = new SubscriptionOverview($this->owner, null, DataSet::Sample);
     $charges = SubscriptionCharge::query()->withCurrentReceiptCount()->get();
     $statuses = $charges->map(fn ($c) => $c->receiptStatus())->countBy(fn ($s) => $s->value);
 
@@ -154,7 +155,7 @@ test('cycles are consecutive and every next charge date follows the last recorde
 
 test('baht totals only add baht amounts, never USD', function () {
     $this->seed(SampleDataSeeder::class);
-    $overview = new ChargeOverview($this->owner);
+    $overview = new ChargeOverview($this->owner, null, DataSet::Sample);
 
     foreach (ThaiFormat::recentMonths(6) as $month) {
         $charges = SubscriptionCharge::query()->chargedInMonth($month)->get();
@@ -169,16 +170,19 @@ test('the pages show the sample data', function () {
     $this->seed(SampleDataSeeder::class);
     $this->actingAs($this->owner);
 
-    $this->get(route('dashboard'))->assertOk()
+    // The dashboard shows real data by default; sample data is chosen with ?data=sample.
+    $this->get(route('dashboard', ['data' => 'sample']))->assertOk()
         ->assertSee('data-test="upcoming-charges"', false)
         ->assertSee('data-test="recent-expenses"', false)
         ->assertSee('data-test="missing-thb"', false)
+        ->assertSee('ข้อมูลตัวอย่าง')
         ->assertDontSee('กราฟจะแสดงเมื่อมีการบันทึกค่าใช้จ่ายจริง');
 
     $this->get(route('subscriptions.index', ['status' => 'all']))->assertOk()->assertSee('ChatGPT Plus')->assertSee('ค่า AI สำหรับคอนเทนต์');
     $this->get(route('charges.index', ['month' => 'all']))->assertOk()->assertSee('data-test="charge-list"', false);
     $this->get(route('charges.index', ['receipt' => 'waiting', 'month' => 'all']))->assertOk()->assertSee('data-test="receipt-waiting-badge"', false);
-    $this->get(route('accounting-periods.index'))->assertOk()->assertSee('รอใบเสร็จ');
+    // Closing and its receipt counts use real data only: sample data never reaches the books.
+    $this->get(route('accounting-periods.index'))->assertOk()->assertDontSee('ChatGPT Plus');
 
     $charge = SubscriptionCharge::query()->receiptStatusIs(ReceiptStatus::Attached)->firstOrFail();
     $this->get(route('charges.show', $charge))->assertOk()->assertSee('แนบเอกสาร');
@@ -403,7 +407,7 @@ test('bank samples are not overdue and not paid early: they show as upcoming, Ma
     $this->seed(SampleDataSeeder::class);
     $this->actingAs($this->owner);
 
-    $html = $this->get(route('dashboard'))->assertOk()->getContent();
+    $html = $this->get(route('dashboard', ['data' => 'sample']))->assertOk()->getContent();
 
     expect($html)->toContain('ค่าเช่า Colocation')
         ->and($html)->toContain('data-test="action-item-manual-due"')

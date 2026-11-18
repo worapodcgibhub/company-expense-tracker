@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Enums\DataSet;
 use App\Enums\ReceiptStatus;
 use App\Enums\SubscriptionCategory;
 use App\Models\AccountingPeriodClosure;
@@ -39,7 +40,12 @@ class ChargeOverview
 
     private CarbonImmutable $today;
 
-    public function __construct(private User $user, ?DateTimeInterface $today = null)
+    /**
+     * $dataSet limits every figure to real data, sample data or both. The
+     * default (All) keeps the old behaviour; the dashboard and reports pass
+     * Real unless a person chooses otherwise.
+     */
+    public function __construct(private User $user, ?DateTimeInterface $today = null, private DataSet $dataSet = DataSet::Real)
     {
         $this->today = CarbonImmutable::instance($today ?? now())->startOfDay();
     }
@@ -61,6 +67,7 @@ class ChargeOverview
     {
         return SubscriptionCharge::query()
             ->visibleTo($this->user)
+            ->inDataSet($this->dataSet)
             ->chargedInMonth($month ?? $this->today)
             ->with('subscription')
             ->get();
@@ -84,6 +91,7 @@ class ChargeOverview
     {
         return SubscriptionCharge::query()
             ->visibleTo($this->user)
+            ->inDataSet($this->dataSet)
             ->charged()
             ->where('currency', '!=', 'THB')
             ->whereNull('amount_thb')
@@ -103,6 +111,7 @@ class ChargeOverview
     {
         return SubscriptionCharge::query()
             ->visibleTo($this->user)
+            ->inDataSet($this->dataSet)
             ->where('entered_after_close', true)
             ->whereNull('verified_at')
             ->with('subscription')
@@ -119,6 +128,7 @@ class ChargeOverview
     {
         return SubscriptionCharge::query()
             ->visibleTo($this->user)
+            ->inDataSet($this->dataSet)
             ->with(['subscription', 'creditCard', 'paymentMethod'])
             ->withCurrentReceiptCount()
             ->latest('id')
@@ -134,20 +144,22 @@ class ChargeOverview
     {
         return SubscriptionCharge::query()
             ->visibleTo($this->user)
+            ->inDataSet($this->dataSet)
             ->receiptStatusIs(ReceiptStatus::Waiting)
             ->count();
     }
 
     /**
      * Company-wide document status of one month's charges, for the
-     * accounting periods page.
+     * accounting periods page. Real data only: sample data is never part of
+     * the books.
      *
      * @return array{waiting: int, unavailable: int, attached: int}
      */
     public static function receiptCountsFor(string $period): array
     {
         $month = AccountingPeriodClosure::startOf($period);
-        $count = fn (ReceiptStatus $status) => SubscriptionCharge::query()->chargedInMonth($month)->receiptStatusIs($status)->count();
+        $count = fn (ReceiptStatus $status) => SubscriptionCharge::query()->inDataSet(DataSet::Real)->chargedInMonth($month)->receiptStatusIs($status)->count();
 
         return [
             'waiting' => $count(ReceiptStatus::Waiting),
@@ -201,7 +213,9 @@ class ChargeOverview
     public function monthlySeries(int $count = 6): array
     {
         $months = ThaiFormat::recentMonths($count, $this->today);
-        $closed = $this->seesAll()
+        // A closing snapshot holds real data only, so it is used only when
+        // real data is what is being shown.
+        $closed = $this->seesAll() && $this->dataSet === DataSet::Real
             ? AccountingPeriodClosure::closedAmong(array_map(fn ($m) => AccountingPeriodClosure::periodOf($m), $months))
             : [];
 
@@ -224,12 +238,14 @@ class ChargeOverview
 
     /**
      * Company-wide figures of one month, saved when the month is closed.
+     * Real data only: sample data is never part of a closed period.
      *
      * @return array{thb_total: int, charge_count: int, missing_thb_count: int, missing_thb_usd: int}
      */
     public static function snapshotFor(string $period): array
     {
         $charges = SubscriptionCharge::query()
+            ->inDataSet(DataSet::Real)
             ->chargedInMonth(AccountingPeriodClosure::startOf($period))
             ->get();
 

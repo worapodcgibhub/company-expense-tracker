@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Enums\Currency;
+use App\Enums\DataSet;
 use App\Enums\SubscriptionStatus;
 use App\Models\Subscription;
 use App\Models\User;
@@ -24,13 +25,19 @@ class SubscriptionOverview
 
     private CarbonImmutable $today;
 
-    public function __construct(User $user, ?DateTimeInterface $today = null)
+    /**
+     * $dataSet limits everything to real data, sample data or both. The
+     * default (All) keeps the old behaviour; the dashboard passes Real unless
+     * a person chooses otherwise.
+     */
+    public function __construct(User $user, ?DateTimeInterface $today = null, DataSet $dataSet = DataSet::Real)
     {
         $this->today = CarbonImmutable::instance($today ?? now())->startOfDay();
 
         // Everything that is not cancelled; small enough to load at once.
         $this->open = Subscription::query()
             ->visibleTo($user)
+            ->inDataSet($dataSet)
             ->where('status', '!=', SubscriptionStatus::Cancelled->value)
             ->with(['creditCard', 'paymentMethod.creditCard', 'paymentMethod.bankAccount', 'responsible'])
             ->orderBy('next_charge_date')

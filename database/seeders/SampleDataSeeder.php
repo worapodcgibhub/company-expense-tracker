@@ -382,6 +382,7 @@ class SampleDataSeeder extends Seeder
             'estimated_amount' => $amount,
             'remind_days_before' => 3,
             'notes' => self::MARKER,
+            'is_sample' => true,
             'status' => SubscriptionStatus::Active,
             'status_changed_at' => now(),
             'created_by' => $owner->id,

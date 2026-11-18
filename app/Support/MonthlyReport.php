@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Enums\Currency;
+use App\Enums\DataSet;
 use App\Enums\ReceiptStatus;
 use App\Models\Expense;
 use App\Models\SubscriptionCharge;
@@ -40,7 +41,13 @@ class MonthlyReport
     /** @var Collection<int, Expense>|null */
     private ?Collection $expenses = null;
 
-    public function __construct(private User $user, DateTimeInterface $month)
+    /**
+     * $dataSet: real data, the sample data kept for trying the system out,
+     * or both. The default (All) keeps the old behaviour; the report page
+     * passes Real unless a person chooses otherwise. One-off expenses are
+     * never samples, so they are left out of the Sample view only.
+     */
+    public function __construct(private User $user, DateTimeInterface $month, private DataSet $dataSet = DataSet::Real)
     {
         $this->month = CarbonImmutable::instance($month)->startOfMonth();
     }
@@ -50,6 +57,11 @@ class MonthlyReport
         return $this->month;
     }
 
+    public function dataSet(): DataSet
+    {
+        return $this->dataSet;
+    }
+
     /**
      * @return Collection<int, SubscriptionCharge>
      */
@@ -57,6 +69,7 @@ class MonthlyReport
     {
         return $this->charges ??= SubscriptionCharge::query()
             ->visibleTo($this->user)
+            ->inDataSet($this->dataSet)
             ->chargedInMonth($this->month)
             ->with(['subscription', 'paymentMethod'])
             ->withCurrentReceiptCount()
@@ -70,13 +83,15 @@ class MonthlyReport
      */
     public function expenses(): Collection
     {
-        return $this->expenses ??= Expense::query()
-            ->visibleTo($this->user)
-            ->paidInMonth($this->month)
-            ->with(['paymentMethod', 'owner'])
-            ->orderBy('paid_on')
-            ->orderBy('id')
-            ->get();
+        return $this->expenses ??= $this->dataSet === DataSet::Sample
+            ? new Collection
+            : Expense::query()
+                ->visibleTo($this->user)
+                ->paidInMonth($this->month)
+                ->with(['paymentMethod', 'owner'])
+                ->orderBy('paid_on')
+                ->orderBy('id')
+                ->get();
     }
 
     /**

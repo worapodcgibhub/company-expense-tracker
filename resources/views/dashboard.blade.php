@@ -15,8 +15,10 @@
      * - Receipts (Phase 2.5): "missing receipt" counts charged cycles still
      *   WAITING for a document; "no receipt available" ones are not counted.
      */
-    $subscriptions = new \App\Support\SubscriptionOverview($user, $today);
-    $charges = new \App\Support\ChargeOverview($user, $today);
+    // Real data unless the person picks sample data / everything (?data=sample|all).
+    $dataSet = \App\Enums\DataSet::fromRequest(request()->query('data'));
+    $subscriptions = new \App\Support\SubscriptionOverview($user, $today, $dataSet);
+    $charges = new \App\Support\ChargeOverview($user, $today, $dataSet);
     $monthlyEstimate = $subscriptions->monthlyEstimateByCurrency();
     $thisMonth = $charges->monthSummary();
 
@@ -92,6 +94,8 @@
                 {{ $user->role->label() }}
             </x-ui.status-badge>
         </header>
+
+        <x-ui.data-set-switch :current="$dataSet" />
 
         {{-- 2FA reminder (real data: shown until the user enables 2FA) --}}
         @if ($needsTwoFactor)
@@ -188,7 +192,12 @@
                             <li>
                                 <a href="{{ route('subscriptions.show', $charge) }}" wire:navigate class="flex items-center justify-between gap-3 py-3 hover:bg-slate-50">
                                     <div class="min-w-0">
-                                        <p class="truncate font-medium text-slate-900">{{ $charge->name }}</p>
+                                        <p class="truncate font-medium text-slate-900">
+                                            {{ $charge->name }}
+                                            @if ($charge->is_sample)
+                                                <x-ui.status-badge tone="amber" :dot="false" class="ml-1 align-middle" data-test="sample-badge">ตัวอย่าง</x-ui.status-badge>
+                                            @endif
+                                        </p>
                                         @php
                                             $channel = $charge->paymentMethod;
                                             $target = $channel?->creditCard?->maskedNumber() ?? $channel?->bankAccount?->maskedNumber();

@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\ChargeOutcome;
 use App\Enums\ChargeRevisionAction;
 use App\Enums\Currency;
+use App\Enums\DataSet;
 use App\Enums\ReceiptKind;
 use App\Enums\ReceiptStatus;
 use App\Exceptions\ChargeConflictException;
@@ -640,6 +641,22 @@ class SubscriptionCharge extends Model
     {
         if (! ($user->isOwner() || $user->isAccountant())) {
             $query->whereIn('subscription_id', Subscription::query()->select('id')->where('responsible_user_id', $user->id));
+        }
+    }
+
+    /**
+     * Charges of real subscriptions, of sample ones, or both (see DataSet).
+     * A charge, its documents and its history are sample data exactly when
+     * their subscription is.
+     *
+     * @param  Builder<SubscriptionCharge>  $query
+     */
+    #[Scope]
+    protected function inDataSet(Builder $query, DataSet $dataSet): void
+    {
+        if ($dataSet !== DataSet::All) {
+            // Same rule as Subscription::inDataSet (also when the column does not exist yet).
+            $query->whereIn('subscription_id', Subscription::query()->select('id')->inDataSet($dataSet));
         }
     }
 

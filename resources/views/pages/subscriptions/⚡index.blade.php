@@ -283,6 +283,9 @@ new #[Title('Subscription')] class extends Component {
                             <div class="min-w-0">
                                 <p @class(['truncate font-medium', 'text-slate-900' => ! $subscription->isCancelled(), 'text-slate-500 line-through' => $subscription->isCancelled()])>
                                     {{ $subscription->name }}
+                                    @if ($subscription->is_sample)
+                                        <x-ui.status-badge tone="amber" :dot="false" class="ml-1 align-middle" data-test="sample-badge">ข้อมูลตัวอย่าง</x-ui.status-badge>
+                                    @endif
                                 </p>
                                 <p class="truncate text-sm text-slate-500">{{ $subscription->vendor }} · {{ $subscription->category->label() }}</p>
                                 <p class="mt-0.5 text-sm text-slate-600">

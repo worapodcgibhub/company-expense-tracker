@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Enums\DataSet;
 use App\Models\AccountingPeriodClosure;
 use App\Models\ChargeReceipt;
 use App\Models\SubscriptionCharge;
@@ -85,7 +86,12 @@ class LedgerCheck extends Command
     private function buildReport(): array
     {
         $charged = SubscriptionCharge::query()->charged()->get();
-        $byMonth = $charged->groupBy(fn (SubscriptionCharge $charge) => (string) $charge->period())->sortKeys();
+
+        // Monthly figures use real data only, like the closing snapshot:
+        // sample data is never part of the books. The counts below stay
+        // company-wide so saved references keep comparing the same way.
+        $realCharged = SubscriptionCharge::query()->inDataSet(DataSet::Real)->charged()->get();
+        $byMonth = $realCharged->groupBy(fn (SubscriptionCharge $charge) => (string) $charge->period())->sortKeys();
 
         $months = [];
         foreach ($byMonth as $period => $charges) {

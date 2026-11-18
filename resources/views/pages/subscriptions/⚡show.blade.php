@@ -243,6 +243,9 @@ new #[Title('Subscription')] class extends Component {
                 <div class="flex flex-wrap items-center gap-2">
                     <h1 class="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">{{ $s->name }}</h1>
                     <x-ui.status-badge :tone="$s->status->tone()" data-test="status-badge">{{ $s->status->label() }}</x-ui.status-badge>
+                    @if ($s->is_sample)
+                        <x-ui.status-badge tone="amber" :dot="false" data-test="sample-badge">ข้อมูลตัวอย่าง</x-ui.status-badge>
+                    @endif
                 </div>
                 <p class="mt-1 text-sm text-slate-500">{{ $s->vendor }} · {{ $s->category->label() }}</p>
             </div>

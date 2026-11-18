@@ -3,6 +3,7 @@
 use App\Models\AccountingPeriodClosure;
 use App\Models\Expense;
 use App\Models\SubscriptionCharge;
+use App\Enums\DataSet;
 use App\Support\MonthlyReport;
 use App\Support\ThaiFormat;
 use Carbon\CarbonImmutable;
@@ -32,6 +33,10 @@ new #[Title('รายงานรายเดือน')] class extends Compone
     #[Url(except: false)]
     public bool $onlyMissing = false;
 
+    /** real (default) | sample | all */
+    #[Url(except: 'real')]
+    public string $data = 'real';
+
     public function mount(): void
     {
         $this->authorize('viewAny', SubscriptionCharge::class);
@@ -55,7 +60,13 @@ new #[Title('รายงานรายเดือน')] class extends Compone
     #[Computed]
     public function report(): MonthlyReport
     {
-        return new MonthlyReport(auth()->user(), $this->selected);
+        return new MonthlyReport(auth()->user(), $this->selected, $this->dataSet);
+    }
+
+    #[Computed]
+    public function dataSet(): DataSet
+    {
+        return DataSet::fromRequest($this->data);
     }
 
     /**
@@ -134,7 +145,12 @@ new #[Title('รายงานรายเดือน')] class extends Compone
         </div>
     </header>
 
-    @if ($closure && $closedThb !== $liveSubscriptionThb)
+    <x-ui.data-set-switch :current="$this->dataSet" :query="['year' => $selected->year, 'month' => $selected->month]" />
+
+    {{-- The closing snapshot holds real data only: compare it only with the real view. --}}
+    @if ($closure && ! $this->dataSet->isReal())
+        {{-- no closing notice for sample / all views --}}
+    @elseif ($closure && $closedThb !== $liveSubscriptionThb)
         <flux:callout icon="lock-closed" color="amber" data-test="report-closed-diff">
             <flux:callout.text>
                 งวดนี้ปิดแล้ว ยอด Subscription ณ วันปิดงวดคือ {{ ThaiFormat::money($closedThb) }}
@@ -234,6 +250,9 @@ new #[Title('รายงานรายเดือน')] class extends Compone
                                 <p class="flex min-w-0 items-center gap-2">
                                     <span class="truncate font-medium text-slate-900">{{ $row['name'] }}</span>
                                     <x-ui.status-badge :tone="$isSubscription ? 'indigo' : 'cyan'" :dot="false">{{ $isSubscription ? 'Subscription' : 'ทั่วไป' }}</x-ui.status-badge>
+                                    @if ($isSubscription && $row['model']->subscription->is_sample)
+                                        <x-ui.status-badge tone="amber" :dot="false" data-test="sample-badge">ข้อมูลตัวอย่าง</x-ui.status-badge>
+                                    @endif
                                 </p>
                                 <p class="text-sm text-slate-500">
                                     {{ ThaiFormat::date($row['date']) }}

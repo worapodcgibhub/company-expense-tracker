@@ -63,6 +63,14 @@ class SubscriptionFactory extends Factory
         ]);
     }
 
+    /**
+     * Sample data (what the sample-data seeder creates).
+     */
+    public function sample(): static
+    {
+        return $this->state(fn (array $attributes) => ['is_sample' => true]);
+    }
+
     public function paused(): static
     {
         return $this->state(fn (array $attributes) => ['status' => SubscriptionStatus::Paused, 'status_changed_at' => now()]);

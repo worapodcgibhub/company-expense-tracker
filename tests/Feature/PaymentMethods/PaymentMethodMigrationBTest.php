@@ -72,7 +72,10 @@ function tableStructure(string $table): array
     $db = DB::connection('migb');
 
     return [
+        // `is_sample` belongs to a migration after B: rolling back to before B removes it first, so it is not part of B's comparison.
         'columns' => collect($db->select("pragma table_info('{$table}')"))
+            ->reject(fn ($c) => $c->name === 'is_sample')
+            ->values()
             ->map(fn ($c) => [$c->name, $c->type, (int) $c->notnull, $c->dflt_value, (int) $c->pk])->all(),
         'indexes' => collect($db->select("pragma index_list('{$table}')"))
             ->map(fn ($i) => [$i->name, (int) $i->unique])->sortBy(0)->values()->all(),
@@ -92,13 +95,14 @@ function dataSnapshot(): array
     $rows = [];
 
     foreach (['users', 'credit_cards', 'payment_methods', 'subscriptions', 'subscription_charges', 'charge_receipts', 'subscription_charge_revisions', 'subscription_status_changes', 'accounting_period_closures'] as $table) {
-        $rows[$table] = $db->table($table)->orderBy('id')->get()->map(fn ($r) => (array) $r)->all();
+        $rows[$table] = $db->table($table)->orderBy('id')->get()->map(fn ($r) => Arr::except((array) $r, ['is_sample']))->all();
     }
 
     return [
         'rows' => $rows,
         'sequence' => $db->table('sqlite_sequence')->whereIn('name', ['subscriptions', 'subscription_charges'])->orderBy('name')->pluck('seq', 'name')->all(),
-        'month' => ChargeOverview::snapshotFor('2026-11'),
+        // Computed without the data-set filter: `is_sample` does not exist in the rolled-back states this test compares.
+        'month' => ChargeOverview::totals(SubscriptionCharge::query()->chargedInMonth(CarbonImmutable::parse('2026-11-01'))->get()),
     ];
 }
 

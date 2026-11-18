@@ -247,7 +247,12 @@ new #[Title('รายการตัดเงิน')] class extends Component 
                     <li wire:key="charge-{{ $charge->id }}">
                         <a href="{{ route('charges.show', $charge) }}" wire:navigate class="flex flex-col gap-2 p-4 transition hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between sm:px-6">
                             <div class="min-w-0">
-                                <p class="truncate font-medium text-slate-900">{{ $charge->subscription->name }}</p>
+                                <p class="truncate font-medium text-slate-900">
+                                    {{ $charge->subscription->name }}
+                                    @if ($charge->subscription->is_sample)
+                                        <x-ui.status-badge tone="amber" :dot="false" class="ml-1 align-middle" data-test="sample-badge">ข้อมูลตัวอย่าง</x-ui.status-badge>
+                                    @endif
+                                </p>
                                 <p class="text-sm text-slate-500">
                                     @php $manualCharge = $charge->paymentMethod !== null && ! $charge->paymentMethod->isAuto(); @endphp
                                     {{ $charge->charged_on ? ($manualCharge ? 'ชำระ ' : 'ตัดเงิน ').ThaiFormat::date($charge->charged_on) : 'รอบ '.ThaiFormat::date($charge->due_date) }}

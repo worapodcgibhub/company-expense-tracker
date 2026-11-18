@@ -6,6 +6,7 @@ use App\Enums\BillingCycle;
 use App\Enums\ChargeOutcome;
 use App\Enums\ChargeRevisionAction;
 use App\Enums\Currency;
+use App\Enums\DataSet;
 use App\Enums\SubscriptionCategory;
 use App\Enums\SubscriptionStatus;
 use App\Exceptions\ChargeConflictException;
@@ -25,6 +26,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use LogicException;
 
@@ -108,6 +110,7 @@ class Subscription extends Model
             'remind_days_before' => 'integer',
             'status' => SubscriptionStatus::class,
             'status_changed_at' => 'datetime',
+            'is_sample' => 'boolean',
         ];
     }
 
@@ -445,6 +448,33 @@ class Subscription extends Model
         if (! ($user->isOwner() || $user->isAccountant())) {
             $query->where('responsible_user_id', $user->id);
         }
+    }
+
+    /**
+     * Real data, sample data, or both (see DataSet). `is_sample` is set by the
+     * sample-data seeder only; forms cannot change it (not fillable).
+     *
+     * @param  Builder<Subscription>  $query
+     */
+    #[Scope]
+    protected function inDataSet(Builder $query, DataSet $dataSet): void
+    {
+        // Before the `is_sample` migration has run, nothing is flagged: every
+        // row is real data. (SQLite would read the missing column as a text
+        // literal and silently match no row at all.)
+        if (! Schema::hasColumn('subscriptions', 'is_sample')) {
+            if ($dataSet === DataSet::Sample) {
+                $query->whereRaw('1 = 0');
+            }
+
+            return;
+        }
+
+        match ($dataSet) {
+            DataSet::Real => $query->where('is_sample', false),
+            DataSet::Sample => $query->where('is_sample', true),
+            DataSet::All => null,
+        };
     }
 
     /**
