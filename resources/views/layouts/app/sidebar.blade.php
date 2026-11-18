@@ -30,6 +30,12 @@
                             </flux:sidebar.item>
                         @endcan
 
+                        @can('viewAny', \App\Models\SubscriptionCharge::class)
+                            <flux:sidebar.item icon="chart-bar" :href="route('reports.monthly')" :current="request()->routeIs('reports.*')" wire:navigate data-test="monthly-report-menu">
+                                {{ __('รายงานรายเดือน') }}
+                            </flux:sidebar.item>
+                        @endcan
+
                         @can('viewAny', \App\Models\Expense::class)
                             <flux:sidebar.item icon="banknotes" :href="route('expenses.index')" :current="request()->routeIs('expenses.*')" wire:navigate data-test="expenses-menu">
                                 {{ __('ค่าใช้จ่ายทั่วไป') }}

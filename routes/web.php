@@ -89,6 +89,12 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->whereNumber('expense')
         ->name('expenses.edit');
 
+    // Monthly report of what was really paid (subscription charges and
+    // one-off expenses). Read-only; everyone sees only what they may see.
+    Route::livewire('reports/monthly', 'pages::reports.monthly')
+        ->middleware('can:viewAny,'.SubscriptionCharge::class)
+        ->name('reports.monthly');
+
     // Document files (private disk). The only way to open them: checks
     // ChargeReceiptPolicy::view (same people who may view the charge).
     Route::get('receipts/{receipt}', [ChargeReceiptController::class, 'show'])
